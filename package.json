@@ -1,0 +1,20 @@
+{
+  "name": "urotakip-server",
+  "version": "1.0.0",
+  "description": "UroTakip - Servis Takip Sistemi",
+  "type": "module",
+  "main": "index.html",
+  "scripts": {
+    "db:generate": "drizzle-kit generate"
+  },
+  "dependencies": {
+    "@netlify/database": "latest",
+    "drizzle-orm": "beta"
+  },
+  "devDependencies": {
+    "@netlify/functions": "^5.3.0",
+    "@types/node": "^26.1.0",
+    "drizzle-kit": "beta",
+    "typescript": "^5.0.0"
+  }
+}

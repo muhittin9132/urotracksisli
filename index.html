@@ -795,54 +795,20 @@ const PatientDetail = ({ bedIndex, patient, onBack, onSave, onDischarge }) => {
   const [confirmDischarge, setConfirmDischarge] = useState(false);
 
   const abxDay = (start) => Math.max(1, daysElapsed(start) + 1);
-  const autoSaveReadyRef = useRef(false);
-  const autoSaveTimerRef = useRef(null);
-  const onSaveRef = useRef(onSave);
-  const patientRef = useRef(patient);
 
-  useEffect(() => { onSaveRef.current = onSave; }, [onSave]);
-  useEffect(() => { patientRef.current = patient; }, [patient]);
-
-  const buildUpdatedPatient = useCallback(() => {
-    const basePatient = patientRef.current;
-    return {
-      ...basePatient, name, age, staticData, visitNotes, antibiotics, cultures, consultations,
+  const handleSave = () => {
+    const updated = {
+      ...patient, name, age, staticData, visitNotes, antibiotics, cultures, consultations,
       status, tasks, assignedTo,
       labsPreop, labsPostop, dailyLabsRequired: dailyLabs,
-      admissionDate: admitDate ? new Date(admitDate + 'T12:00:00').toISOString() : basePatient.admissionDate,
+      admissionDate: admitDate ? new Date(admitDate + 'T12:00:00').toISOString() : patient.admissionDate,
       fromEmergency: emergAdmit,
       nephrostomyRight: nephRight, nephrostomyLeft: nephLeft,
       lastNephrostomyDressingDate: (nephRight || nephLeft) ? dressingDate : '',
-      rounds: { ...(basePatient.rounds || {}), [TODAY]: { ...currentRound, date: TODAY } }
+      rounds: { ...(patient.rounds || {}), [TODAY]: { ...currentRound, date: TODAY } }
     };
-  }, [
-    name, age, staticData, visitNotes, antibiotics, cultures, consultations,
-    status, tasks, assignedTo, labsPreop, labsPostop, dailyLabs, admitDate, emergAdmit,
-    nephRight, nephLeft, dressingDate, currentRound, TODAY
-  ]);
-
-  const saveOnly = useCallback(() => {
-    onSaveRef.current(bedIndex, buildUpdatedPatient());
-  }, [bedIndex, buildUpdatedPatient]);
-
-  useEffect(() => {
-    if (!autoSaveReadyRef.current) {
-      autoSaveReadyRef.current = true;
-      return;
-    }
-    if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current);
-    autoSaveTimerRef.current = setTimeout(() => { saveOnly(); }, 600);
-    return () => { if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current); };
-  }, [saveOnly]);
-
-  const handleBack = () => {
-    if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current);
-    saveOnly();
+    onSave(bedIndex, updated);
     onBack();
-  };
-
-  const handleSave = () => {
-    handleBack();
   };
 
   const updateField = (section, field, value) =>
@@ -874,7 +840,7 @@ const PatientDetail = ({ bedIndex, patient, onBack, onSave, onDischarge }) => {
       <div className="bg-white border-b sticky top-0 z-30 shrink-0">
         <div className="flex items-center justify-between p-3 sm:p-4 gap-2">
           <div className="flex items-center gap-2 sm:gap-4 min-w-0">
-            <button onClick={handleBack} className="p-2 hover:bg-slate-100 rounded-full text-slate-500 shrink-0"><ArrowLeft size={22} /></button>
+            <button onClick={onBack} className="p-2 hover:bg-slate-100 rounded-full text-slate-500 shrink-0"><ArrowLeft size={22} /></button>
             <div className="min-w-0">
               <div className="flex items-center gap-2 flex-wrap">
                 <h1 className="font-bold text-base sm:text-xl text-slate-800 truncate">{name}</h1>
@@ -1157,18 +1123,10 @@ const PatientDetail = ({ bedIndex, patient, onBack, onSave, onDischarge }) => {
                     </div>
                     <button onClick={() => setConsultations(consultations.filter(x => x.id !== c.id))} className="text-slate-300 hover:text-red-500"><Trash2 size={15} /></button>
                   </div>
-                  <div className="grid grid-cols-1 sm:grid-cols-[180px_1fr] gap-3 items-end">
-                    <Field
-                      label="Konsültasyon Tarihi"
-                      type="date"
-                      value={c.requestDate || TODAY}
-                      onChange={v => setConsultations(consultations.map(x => x.id === c.id ? { ...x, requestDate: v } : x))}
-                    />
-                    <label className="flex items-center gap-2.5 text-xs font-black text-slate-500 uppercase cursor-pointer pb-2.5">
-                      <input type="checkbox" checked={c.status === 'RESULTED'} onChange={() => setConsultations(consultations.map(x => x.id === c.id ? { ...x, status: x.status === 'PENDING' ? 'RESULTED' : 'PENDING' } : x))} className="w-5 h-5 rounded text-emerald-600" />
-                      {c.status === 'RESULTED' ? 'Cevap Geldi' : 'Cevap Bekleniyor'}
-                    </label>
-                  </div>
+                  <label className="flex items-center gap-2.5 text-xs font-black text-slate-500 uppercase cursor-pointer">
+                    <input type="checkbox" checked={c.status === 'RESULTED'} onChange={() => setConsultations(consultations.map(x => x.id === c.id ? { ...x, status: x.status === 'PENDING' ? 'RESULTED' : 'PENDING' } : x))} className="w-5 h-5 rounded text-emerald-600" />
+                    {c.status === 'RESULTED' ? 'Cevap Geldi' : 'Cevap Bekleniyor'}
+                  </label>
                   {c.status === 'RESULTED' && (
                     <textarea className="mt-3 w-full text-sm p-3 border border-slate-200 rounded-xl bg-slate-50 outline-none focus:bg-white focus:ring-2 focus:ring-emerald-400 min-h-[80px]"
                       placeholder="Konsültan önerisi..." value={c.result || ''}
