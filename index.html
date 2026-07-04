@@ -1,0 +1,1936 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="robots" content="noindex, nofollow" />
+  <title>ÜroTakip — Üroloji Servis Takip Sistemi</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script type="importmap">
+  {
+    "imports": {
+      "react": "https://esm.sh/react@18.3.1",
+      "react-dom/client": "https://esm.sh/react-dom@18.3.1/client?deps=react@18.3.1",
+      "lucide-react": "https://esm.sh/lucide-react@0.383.0?deps=react@18.3.1"
+    }
+  }
+  </script>
+  <script src="https://unpkg.com/@babel/standalone@7.24.7/babel.min.js"></script>
+  <style>
+    body { margin: 0; font-family: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif; }
+    #loading { position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; background: #f1f5f9; color: #64748b; font-size: 14px; font-weight: 600; }
+    #loading .spin { width: 32px; height: 32px; border: 3px solid #e2e8f0; border-top-color: #4f46e5; border-radius: 50%; animation: sp 0.8s linear infinite; }
+    @keyframes sp { to { transform: rotate(360deg); } }
+  </style>
+</head>
+<body>
+  <div id="loading"><div class="spin"></div>Uygulama yükleniyor...</div>
+  <div id="root"></div>
+  <noscript>Bu uygulama için JavaScript gereklidir.</noscript>
+
+  <script type="text/babel" data-type="module" data-presets="react">
+import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { createRoot } from 'react-dom/client';
+import {
+  LayoutDashboard, BedDouble, Stethoscope, TestTube,
+  Search, List, LayoutGrid, Printer, Upload, ShieldAlert, Clock, CheckCircle2,
+  Save, ArrowLeft, Trash2, Droplet, FlaskConical, FileText, Plus, User, Pill, Users,
+  MessageSquareQuote, AlertTriangle, X, Sparkles, Loader2, Send, Bot, MessageSquare,
+  Settings as SettingsIcon, Download, Menu, HeartPulse,
+  CheckSquare, Database
+} from 'lucide-react';
+
+/* ================= SABİTLER ================= */
+
+const DEFAULT_WARD_SIZE = 30;
+const STORAGE_KEY = 'urotakip:ward_v1';
+const WARD_STATE_ENDPOINT = '/api/ward-state';
+
+const STATUS = {
+  STABLE: 'STABLE', WATCH: 'WATCH', CRITICAL: 'CRITICAL', DISCHARGE: 'DISCHARGE',
+  PRE_OP: 'PRE_OP', POST_OP: 'POST_OP', EMERGENCY: 'EMERGENCY'
+};
+
+const STATUS_LABELS = {
+  STABLE: 'Stabil', WATCH: 'Yakın Takip', CRITICAL: 'Kritik', DISCHARGE: 'Taburcu Planı',
+  PRE_OP: 'Ameliyat Öncesi', POST_OP: 'Ameliyat Sonrası', EMERGENCY: 'Acil Durum'
+};
+
+const STATUS_STYLES = {
+  STABLE:    { border: 'border-l-emerald-500', chip: 'bg-emerald-50 text-emerald-700 border-emerald-200' },
+  WATCH:     { border: 'border-l-yellow-500',  chip: 'bg-yellow-50 text-yellow-800 border-yellow-200' },
+  CRITICAL:  { border: 'border-l-red-600',     chip: 'bg-red-50 text-red-700 border-red-200' },
+  DISCHARGE: { border: 'border-l-blue-500',    chip: 'bg-blue-50 text-blue-700 border-blue-200' },
+  PRE_OP:    { border: 'border-l-amber-500',   chip: 'bg-amber-50 text-amber-800 border-amber-200' },
+  POST_OP:   { border: 'border-l-indigo-500',  chip: 'bg-indigo-50 text-indigo-700 border-indigo-200' },
+  EMERGENCY: { border: 'border-l-rose-600',    chip: 'bg-rose-50 text-rose-700 border-rose-200' },
+};
+
+const ASA_SCORES = ['ASA I', 'ASA II', 'ASA III', 'ASA IV', 'ASA V'];
+const CULTURE_TYPES = ['İdrar', 'Kan', 'Nefrostomi', 'Yara Yeri', 'Sonda', 'Diğer'];
+/* Açık/insizyonel ürolojik cerrahiler — işlem adında geçen kelimeye göre pansuman listesine alınır */
+const OPEN_SURGERY_KEYWORDS = [
+  // Böbrek
+  'pnl', 'perkütan nefrolitotomi', 'nefrektomi', 'nefroüreterektomi', 'nefrolitotomi',
+  'piyelolitotomi', 'pyelolitotomi', 'piyeloplasti', 'pyeloplasti', 'adrenalektomi', 'sürrenalektomi',
+  // Üreter
+  'üreterolitotomi', 'üreteroneosistostomi', 'üreter reimplantasyon', 'boari',
+  // Mesane / prostat
+  'sistektomi', 'sistolitotomi', 'divertikülektomi', 'prostatektomi', 'tvp', 'transvezikal',
+  'rrp', 'ralp', 'vezikovajinal', 'vvf', 'fistül onarım',
+  // Retroperiton / lenf
+  'rplnd', 'lenfadenektomi', 'lenf nodu diseksiyon',
+  // Genital / skrotal / penil
+  'orşiektomi', 'orkiektomi', 'orşiopeksi', 'eksplorasyon', 'varikoselektomi',
+  'hidrosel', 'spermatoselektomi', 'penektomi', 'penil protez', 'üretroplasti',
+  // Enfeksiyon / yumuşak doku
+  'fournier', 'debridman',
+  // Genel belirteçler
+  'açık', 'laparoskopik', 'laparaskopik', 'robotik', 'robot yardımlı'
+];
+const trLower = (s) => (s || '').toLocaleLowerCase('tr-TR');
+const isOpenSurgery = (opName) => { const n = trLower(opName); return OPEN_SURGERY_KEYWORDS.some(k => n.includes(k)); };
+
+const todayStr = () => new Date().toISOString().split('T')[0];
+
+const daysElapsed = (dateString) => {
+  if (!dateString) return 0;
+  const start = new Date(dateString); start.setHours(0, 0, 0, 0);
+  const now = new Date(); now.setHours(0, 0, 0, 0);
+  return Math.floor((now.getTime() - start.getTime()) / 86400000);
+};
+
+const podText = (dateStr) => {
+  if (!dateStr) return 'Op. tarihi yok';
+  const d = daysElapsed(dateStr);
+  if (d < 0) return `Preop (${Math.abs(d)} gün kaldı)`;
+  return `POD ${d}`;
+};
+
+const dayDiff = (a, b) => {
+  if (!a || !b) return null;
+  const x = new Date(a); x.setHours(0, 0, 0, 0);
+  const y = new Date(b); y.setHours(0, 0, 0, 0);
+  return Math.round((y.getTime() - x.getTime()) / 86400000);
+};
+
+/* Cerrahi plan varsa POD, yoksa yatış gününü göster */
+const stayOrPodText = (opName, opDate, admissionDate) => {
+  if (!(opName || '').trim()) return `Yatış ${Math.max(1, daysElapsed(admissionDate) + 1)}. gün`;
+  if (!opDate) return 'Plan tarihi belirsiz';
+  return podText(opDate);
+};
+
+const emptyRound = () => ({
+  date: todayStr(),
+  vitals: { temp: '', pulse: '', bp: '', sats: '', o2Support: false },
+  io: { oral: '', ivFluids: '', urineOutput: '', urineDescription: '', drain1: '', drain2: '', bowel: false },
+  labs: { hb: '', wbc: '', plt: '', creatinine: '', na: '', k: '', crp: '', inr: '' },
+  meds: { analgesic: '', anticoagulant: '', lastAnticoagulantTime: '' },
+  sbar: { situation: '', background: '', assessment: '', recommendation: '' },
+  notes: ''
+});
+
+const LAB_FIELDS = [['Hb', 'hb'], ['WBC', 'wbc'], ['PLT', 'plt'], ['Kreatinin', 'creatinine'], ['Na', 'na'], ['K', 'k'], ['CRP', 'crp'], ['INR', 'inr']];
+const emptyLabPanel = () => ({ date: '', hb: '', wbc: '', plt: '', creatinine: '', na: '', k: '', crp: '', inr: '' });
+
+const emptyStatic = () => ({
+  complaint: '', historyDisease: '', historySurgery: '', allergies: '',
+  bloodGroup: '', asaScore: 'ASA II', serology: '', operationName: '', operationDate: '',
+  psa: '', psaDate: '', admitDx: ''
+});
+
+const newPatientShell = (bedNo, name = '') => ({
+  id: Date.now().toString() + Math.random().toString(36).slice(2, 7),
+  bedNumber: bedNo, name, age: 0, gender: 'M',
+  admissionDate: new Date().toISOString(), status: STATUS.PRE_OP,
+  staticData: emptyStatic(), antibiotics: [], cultures: [], consultations: [],
+  visitNotes: '', rounds: {}, tasks: [],
+  nephrostomyRight: false, nephrostomyLeft: false, lastNephrostomyDressingDate: '', assignedTo: '',
+  labsPreop: emptyLabPanel(), labsPostop: emptyLabPanel(), dailyLabsRequired: false,
+  fromEmergency: false
+});
+
+const lastRoundOf = (p) => {
+  const rounds = Object.values(p.rounds || {});
+  if (!rounds.length) return null;
+  return rounds.sort((a, b) => new Date(b.date) - new Date(a.date))[0];
+};
+
+/* ================= KALICI DEPOLAMA ================= */
+
+const persistWard = async (beds, wardSize) => {
+  try {
+    const payload = { beds, wardSize, savedAt: new Date().toISOString() };
+    const response = await fetch(WARD_STATE_ENDPOINT, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    if (!response.ok) throw new Error('Sunucu kaydı başarısız');
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
+    return true;
+  } catch (e) {
+    console.error('Kayıt hatası:', e);
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify({ beds, wardSize, savedAt: new Date().toISOString() }));
+    } catch (localError) {
+      console.error('Yerel yedek kayıt hatası:', localError);
+    }
+    return false;
+  }
+};
+
+const loadWard = async () => {
+  try {
+    const response = await fetch(WARD_STATE_ENDPOINT, { headers: { Accept: 'application/json' } });
+    if (response.ok) {
+      const data = await response.json();
+      if (data && Array.isArray(data.beds)) {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+        return data;
+      }
+    }
+  } catch (e) { /* sunucu kaydı yoksa yerel yedeğe düş */ }
+  try {
+    const v = localStorage.getItem(STORAGE_KEY);
+    if (v) return JSON.parse(v);
+  } catch (e) { /* kayıt henüz yok */ }
+  return null;
+};
+
+/* --- AI için API anahtarı (isteğe bağlı, yalnızca bu tarayıcıda saklanır) --- */
+const API_KEY_STORAGE = 'urotakip:apikey';
+const getApiKey = () => { try { return localStorage.getItem(API_KEY_STORAGE) || ''; } catch (e) { return ''; } };
+const saveApiKey = (k) => { try { k ? localStorage.setItem(API_KEY_STORAGE, k.trim()) : localStorage.removeItem(API_KEY_STORAGE); } catch (e) { } };
+const NO_KEY_MSG = 'AI özellikleri sistem tarafından otomatik olarak yönetilmektedir.';
+
+/* ================= GEMINI API ================= */
+
+const callGemini = async (userContent) => {
+  const response = await fetch('/api/gemini', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({
+      prompt: userContent
+    })
+  });
+  const data = await response.json();
+  if (data.error) throw new Error(data.error || 'API hatası');
+  if (!data.text) throw new Error('AI yanıt vermedi');
+  return data.text;
+};
+
+const callClaude = callGemini;
+
+const parseAIJson = (text) => {
+  const clean = text.replace(/```json|```/g, '').trim();
+  const start = clean.indexOf('{');
+  const end = clean.lastIndexOf('}');
+  if (start === -1 || end === -1) throw new Error('JSON bulunamadı');
+  return JSON.parse(clean.slice(start, end + 1));
+};
+
+const EXTRACTION_PROMPT = `Sen deneyimli bir üroloji uzmanı asistanısın. Sağlanan tıbbi metni/belgeyi (epikriz, rapor) analiz et ve SADECE geçerli JSON döndür. Başka hiçbir metin, açıklama veya markdown kullanma. Yanıt Türkçe olmalı.
+
+JSON şeması:
+{
+  "name": "hasta adı soyadı",
+  "age": sayı,
+  "gender": "M veya F",
+  "operationName": "işlem adı",
+  "operationDate": "YYYY-MM-DD",
+  "complaint": "yatış nedeni ve öykü özeti",
+  "historyDisease": "kronik hastalıklar",
+  "historySurgery": "geçirilmiş ameliyatlar",
+  "allergies": "alerjiler",
+  "antibiotics": "SADECE antimikrobiyal ajanlar, yoksa null",
+  "routineMeds": "diğer rutin ilaçlar",
+  "bloodGroup": "kan grubu",
+  "asaScore": "ASA I-V",
+  "serology": "HBsAg/Anti-HCV/Anti-HIV sonuçları, yoksa Belirtilmemiş",
+  "psa": "PSA değeri, sadece sayı (erkek hastada varsa)",
+  "psaDate": "PSA ölçüm tarihi YYYY-MM-DD",
+  "admissionDate": "hastaneye yatış tarihi YYYY-MM-DD",
+  "fromEmergency": "acil servisten yatış ise true, değilse false",
+  "admitDx": "kısa yatış tanısı, 1-3 kelime (örn: piyelonefrit, ürosepsis, hematüri)",
+  "ikab": { "result": "idrar kültürü sonucu", "date": "YYYY-MM-DD" } veya null
+}
+
+Bulunamayan alanları null bırak. "Yok", "Belirtilmemiş" gibi kelimeleri antibiotics alanına yazma.`;
+
+/* ================= ORTAK UI PARÇALARI ================= */
+
+const SectionTitle = ({ icon: Icon, title, color }) => (
+  <div className="flex items-center gap-3">
+    <div className={`p-2.5 rounded-xl bg-white border border-slate-100 shadow-sm ${color}`}><Icon size={20} /></div>
+    <h2 className="font-black text-base sm:text-lg uppercase tracking-tighter text-slate-800">{title}</h2>
+  </div>
+);
+
+const Field = ({ label, value, onChange, type = 'text', placeholder = '', required = false }) => (
+  <div className="flex flex-col gap-1.5">
+    <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest px-1">{label}{required && <span className="text-rose-500"> *</span>}</label>
+    <input
+      type={type} value={value} placeholder={placeholder} required={required}
+      onChange={(e) => onChange(e.target.value)}
+      className="px-3 py-2.5 rounded-xl border border-slate-200 bg-white hover:border-indigo-200 focus:border-indigo-500 outline-none text-sm font-bold shadow-sm transition-all text-slate-700 w-full"
+    />
+  </div>
+);
+
+const TextAreaField = ({ label, value, onChange, placeholder = '', rows = 3 }) => (
+  <div className="flex flex-col gap-1.5">
+    <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest px-1">{label}</label>
+    <textarea
+      value={value} placeholder={placeholder} rows={rows}
+      onChange={(e) => onChange(e.target.value)}
+      className="px-3 py-2.5 rounded-xl border border-slate-200 bg-slate-50 focus:bg-white focus:border-indigo-500 outline-none text-sm font-medium shadow-inner transition-all text-slate-700 w-full leading-relaxed"
+    />
+  </div>
+);
+
+const EmptyState = ({ icon: Icon, text }) => (
+  <div className="flex flex-col items-center justify-center h-56 text-slate-400 bg-white rounded-xl border border-dashed border-slate-300">
+    <Icon size={44} className="mb-3 text-slate-300" />
+    <p className="text-sm font-medium">{text}</p>
+  </div>
+);
+
+const LabPanelGrid = ({ values, onChange, dateLabel }) => (
+  <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+    <Field label={dateLabel} type="date" value={values.date || ''} onChange={v => onChange({ ...values, date: v })} />
+    {LAB_FIELDS.map(([lbl, key]) => (
+      <Field key={key} label={lbl} value={values[key] || ''} onChange={v => onChange({ ...values, [key]: v })} />
+    ))}
+  </div>
+);
+
+/* ================= YATAK KARTI ================= */
+
+const BedCard = ({ bedNumber, patient, onClick }) => {
+  if (!patient) {
+    return (
+      <div onClick={onClick} className="p-3 rounded-xl border border-dashed border-slate-200 bg-slate-50 flex flex-col items-center justify-center min-h-[13rem] cursor-pointer hover:bg-slate-100 hover:border-indigo-300 transition-all">
+        <div className="w-8 h-8 rounded-full bg-slate-200 text-slate-400 flex items-center justify-center font-bold text-xs mb-1">{bedNumber}</div>
+        <span className="text-[10px] font-bold text-slate-400 uppercase">Boş Yatak</span>
+        <span className="text-[9px] text-slate-300 mt-1">Yatış için tıklayın</span>
+      </div>
+    );
+  }
+
+  const lastRound = lastRoundOf(patient);
+  const alerts = [];
+  if (lastRound?.vitals?.temp && parseFloat(lastRound.vitals.temp.replace(',', '.')) >= 38) alerts.push(`Ateş ${lastRound.vitals.temp}°C`);
+  const urine = (lastRound?.io?.urineDescription || '').toLowerCase();
+  if (urine.includes('vişne') || urine.includes('kiraz') || urine.includes('cherry') || urine.includes('hematüri') || urine.includes('hemorajik')) alerts.push('Hematüri');
+  if (lastRound?.labs?.hb && parseFloat(lastRound.labs.hb.replace(',', '.')) < 9) alerts.push('Düşük Hb');
+  if (lastRound?.labs?.creatinine && parseFloat(lastRound.labs.creatinine.replace(',', '.')) > 1.5) alerts.push('Kreatinin ↑');
+  if (lastRound?.labs?.k && parseFloat(lastRound.labs.k.replace(',', '.')) >= 5.5) alerts.push('Hiperkalemi');
+
+  const idrarKulturu = [...(patient.cultures || [])].filter(c => c.type === 'İdrar').sort((a, b) => new Date(b.takenAt) - new Date(a.takenAt))[0];
+  const digerKulturler = (patient.cultures || []).filter(c => c.type !== 'İdrar');
+  const fmtDate = (d) => { const x = new Date(d); return `${x.getDate()}/${x.getMonth() + 1}`; };
+  const activeAbx = (patient.antibiotics || []).filter(a => a.isActive);
+  const abxDay = (start) => Math.max(1, daysElapsed(start) + 1);
+  const st = STATUS_STYLES[patient.status] || STATUS_STYLES.STABLE;
+  const borderCls = patient.fromEmergency ? 'border-l-red-600' : st.border;
+  const pendingConsults = (patient.consultations || []).filter(c => c.status === 'PENDING');
+  const openTasks = (patient.tasks || []).filter(t => !t.completed);
+
+  return (
+    <div onClick={onClick} className={`p-3 rounded-xl border border-slate-200 border-l-4 ${borderCls} bg-white shadow-sm hover:border-indigo-400 hover:shadow-md transition-all cursor-pointer flex flex-col gap-1.5 min-h-[13rem] overflow-hidden print-card`}>
+      {/* 1. Satır: Kimlik + POD + ASA */}
+      <div className="flex justify-between items-center text-[11px] font-black border-b border-slate-100 pb-1 gap-1">
+        <div className="flex items-center gap-1.5 truncate min-w-0">
+          <span className="bg-indigo-600 text-white w-5 h-5 rounded flex items-center justify-center text-[9px] shrink-0">{bedNumber}</span>
+          <span className="text-slate-900 uppercase truncate">{patient.name} {patient.age > 0 ? patient.age : ''}{patient.gender === 'F' ? ' ♀' : ' ♂'}</span>
+        </div>
+        <div className="flex gap-2 shrink-0 items-center">
+          <span className="text-blue-700">{stayOrPodText(patient.staticData.operationName, patient.staticData.operationDate, patient.admissionDate)}</span>
+          <span className="text-slate-400 hidden sm:inline">{patient.staticData.asaScore || ''}</span>
+          {patient.fromEmergency && <span className="px-1.5 py-0.5 rounded border text-[9px] uppercase bg-red-600 text-white border-red-600 font-black">ACİL</span>}
+          <span className={`px-1.5 py-0.5 rounded border text-[9px] uppercase ${st.chip}`}>{STATUS_LABELS[patient.status]}</span>
+        </div>
+      </div>
+
+      {/* 2. Satır: Öykü / Plan */}
+      <div className="text-[10px] leading-tight text-slate-600 line-clamp-2">
+        <span className="font-bold text-slate-800 uppercase">Öykü/Plan: </span>
+        {patient.staticData.complaint || 'Öykü girilmedi'}{patient.staticData.operationName ? ` — ${patient.staticData.operationName}` : ''}
+      </div>
+
+      {/* 3. Satır: Kültürler */}
+      <div className="text-[9px] border-t border-slate-50 pt-0.5 leading-tight text-slate-700">
+        <span className="font-bold text-slate-800 uppercase">İdrar K: </span>
+        <span className={idrarKulturu?.status === 'RESULTED' ? 'text-emerald-600 font-bold' : 'text-amber-600'}>
+          {idrarKulturu ? `${idrarKulturu.status === 'RESULTED' ? (idrarKulturu.result || 'Sonuçlandı') : 'Bekliyor'} (${fmtDate(idrarKulturu.takenAt)})` : '—'}
+        </span>
+        <span className="text-slate-300 mx-1">|</span>
+        <span className="font-bold text-slate-800 uppercase">Diğer: </span>
+        {digerKulturler.length > 0 ? digerKulturler.map((c, i) => (
+          <span key={c.id} className={c.status === 'RESULTED' ? 'text-emerald-600 font-bold' : 'text-slate-500'}>
+            {c.type}{c.status === 'RESULTED' && c.result ? ` (${c.result})` : ''} ({fmtDate(c.takenAt)}){i < digerKulturler.length - 1 ? ', ' : ''}
+          </span>
+        )) : <span className="text-slate-400 italic">yok</span>}
+      </div>
+
+      {/* 4. Satır: Vizit notu + konsültasyon + görev */}
+      <div className="text-[10px] text-slate-500 bg-slate-50/60 p-1.5 rounded border border-slate-100 line-clamp-2">
+        <span className="font-bold text-slate-700 uppercase">Süreç: </span>
+        {patient.visitNotes || 'Vizit notu girilmedi'}
+        {pendingConsults.length > 0 && <span className="text-blue-700 font-bold"> | Kons: {pendingConsults.map(c => c.department).join(', ')}</span>}
+        {openTasks.length > 0 && <span className="text-amber-700 font-bold"> | {openTasks.length} açık görev</span>}
+      </div>
+
+      {/* 5. Satır: Kritik uyarılar */}
+      <div className={`px-1.5 py-1 rounded border ${alerts.length > 0 ? 'bg-rose-50 border-rose-100 text-rose-700' : 'bg-emerald-50 border-emerald-100 text-emerald-700'}`}>
+        <div className="flex items-center gap-1 text-[10px] font-bold">
+          <AlertTriangle size={11} className={alerts.length > 0 ? 'animate-pulse shrink-0' : 'shrink-0'} />
+          <span className="truncate">{alerts.length > 0 ? alerts.join(' • ') : 'Kritik bulgu yok'}</span>
+        </div>
+      </div>
+
+      {/* 6. Satır: Antibiyotik */}
+      <div className="text-[10px] font-bold text-violet-700 border-t border-slate-50 pt-1 flex flex-wrap gap-x-2 gap-y-1 items-center">
+        <span className="uppercase text-slate-400">ABX:</span>
+        {activeAbx.length > 0 ? activeAbx.map(a => (
+          <span key={a.id} className="bg-violet-50 px-1.5 py-0.5 rounded">{a.name} ({abxDay(a.startDate)}. gün)</span>
+        )) : <span className="text-slate-400 italic font-normal">yok</span>}
+        {(patient.nephrostomyRight || patient.nephrostomyLeft) && (
+          <span className="bg-rose-50 text-rose-700 px-1.5 py-0.5 rounded ml-auto">
+            Nefrostomi {patient.nephrostomyRight ? 'SAĞ' : ''}{patient.nephrostomyRight && patient.nephrostomyLeft ? '+' : ''}{patient.nephrostomyLeft ? 'SOL' : ''}
+          </span>
+        )}
+      </div>
+    </div>
+  );
+};
+
+/* ================= KENAR ÇUBUĞU ================= */
+
+const NavButton = ({ active, onClick, icon, label, badge }) => (
+  <button onClick={onClick} className={`w-full flex items-center gap-3 px-4 py-2.5 rounded-xl text-sm font-bold transition-all ${active ? 'bg-indigo-50 text-indigo-700' : 'text-slate-500 hover:bg-slate-50 hover:text-slate-800'}`}>
+    {icon}
+    <span className="flex-1 text-left">{label}</span>
+    {badge > 0 && <span className="bg-amber-100 text-amber-800 text-[10px] font-black px-2 py-0.5 rounded-full">{badge}</span>}
+  </button>
+);
+
+const Sidebar = ({ currentView, onNavigate, beds, saveState }) => {
+  const occupied = beds.filter(Boolean).length;
+  const pendingCultures = beds.filter(b => b?.cultures?.some(c => c.status === 'PENDING')).length;
+  const preOp = beds.filter(b => b?.status === STATUS.PRE_OP).length;
+  const postOp = beds.filter(b => b?.status === STATUS.POST_OP).length;
+  const acil = beds.filter(b => b?.fromEmergency).length;
+
+  return (
+    <div className="w-[250px] bg-white border-r border-slate-200 flex flex-col h-full">
+      <div className="p-5 flex items-center gap-3">
+        <div className="p-2 bg-indigo-600 rounded-xl text-white"><Stethoscope size={20} /></div>
+        <div>
+          <div className="font-black text-slate-800 tracking-tight leading-none">ÜroTakip</div>
+          <div className="text-[9px] font-bold text-slate-400 uppercase tracking-widest mt-0.5">Servis Takip Sistemi</div>
+        </div>
+      </div>
+
+      <nav className="flex-1 px-3 space-y-1 overflow-y-auto">
+        <NavButton active={currentView === 'dashboard'} onClick={() => onNavigate('dashboard')} icon={<LayoutDashboard size={18} />} label="Özet Panel" />
+        <NavButton active={currentView === 'beds'} onClick={() => onNavigate('beds')} icon={<BedDouble size={18} />} label="Yatak Planı" />
+        <NavButton active={currentView === 'cultures'} onClick={() => onNavigate('cultures')} icon={<TestTube size={18} />} label="Kültür Takibi" badge={pendingCultures} />
+        <NavButton active={currentView === 'tasks'} onClick={() => onNavigate('tasks')} icon={<ShieldAlert size={18} />} label="Pansuman Takibi" />
+        <button onClick={() => setTimeout(() => window.print(), 100)} className="w-full flex items-center gap-3 px-4 py-2.5 rounded-xl text-sm font-bold text-slate-500 hover:bg-slate-50 hover:text-slate-800 transition-all">
+          <Printer size={18} /><span className="flex-1 text-left">Devir Listesi Yazdır</span>
+        </button>
+        <NavButton active={currentView === 'settings'} onClick={() => onNavigate('settings')} icon={<SettingsIcon size={18} />} label="Ayarlar & Yedek" />
+      </nav>
+
+      <div className="p-4 border-t border-slate-100 space-y-2">
+        <div className="flex justify-between text-[10px] font-bold text-slate-400 uppercase">
+          <span>Doluluk</span><span className="text-slate-700">{occupied}/{beds.length}</span>
+        </div>
+        <div className="w-full bg-slate-100 rounded-full h-1.5">
+          <div className="bg-indigo-600 h-1.5 rounded-full transition-all" style={{ width: `${beds.length ? (occupied / beds.length) * 100 : 0}%` }} />
+        </div>
+        <div className="flex gap-2 text-[9px] font-bold uppercase pt-1 flex-wrap">
+          <span className="text-amber-700 bg-amber-50 px-1.5 py-0.5 rounded">Preop {preOp}</span>
+          <span className="text-indigo-700 bg-indigo-50 px-1.5 py-0.5 rounded">Postop {postOp}</span>
+          <span className="text-red-700 bg-red-50 px-1.5 py-0.5 rounded">Acil {acil}</span>
+        </div>
+        <div className={`text-[9px] font-bold uppercase flex items-center gap-1 pt-1 ${saveState === 'saved' ? 'text-emerald-600' : saveState === 'saving' ? 'text-amber-600' : 'text-slate-400'}`}>
+          <Database size={10} /> {saveState === 'saved' ? 'Kayıtlı' : saveState === 'saving' ? 'Kaydediliyor...' : saveState === 'error' ? 'Kayıt hatası!' : 'Hazır'}
+        </div>
+      </div>
+    </div>
+  );
+};
+
+/* ================= ÖZET PANEL (DASHBOARD) ================= */
+
+const Dashboard = ({ beds, onNavigateToBed }) => {
+  const occupied = beds.map((b, i) => ({ bed: b, index: i })).filter(x => x.bed);
+
+  const pendingConsults = [];
+  const openTasks = [];
+  const pendingCultures = [];
+  occupied.forEach(({ bed, index }) => {
+    (bed.consultations || []).filter(c => c.status === 'PENDING').forEach(c => pendingConsults.push({ bed, index, item: c, days: daysElapsed(c.requestDate) }));
+    (bed.tasks || []).filter(t => !t.completed).forEach(t => openTasks.push({ bed, index, item: t, days: t.createdAt ? daysElapsed(t.createdAt) : 0 }));
+    (bed.cultures || []).filter(c => c.status === 'PENDING').forEach(c => pendingCultures.push({ bed, index, item: c, days: daysElapsed(c.takenAt) }));
+  });
+  pendingConsults.sort((a, b) => b.days - a.days);
+  pendingCultures.sort((a, b) => b.days - a.days);
+  openTasks.sort((a, b) => b.days - a.days);
+
+  const PanelCard = ({ icon: Icon, title, color, bgColor, items, primary, dayColor }) => (
+    <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden flex flex-col">
+      <div className="px-4 py-3 border-b border-slate-100 flex items-center gap-2">
+        <div className={`p-1.5 rounded-lg ${bgColor} ${color}`}><Icon size={16} /></div>
+        <span className="font-bold text-sm text-slate-800 flex-1">{title}</span>
+        <span className={`text-[10px] font-black px-2 py-0.5 rounded-full ${items.length > 0 ? bgColor + ' ' + color : 'bg-slate-100 text-slate-400'}`}>{items.length}</span>
+      </div>
+      <div className="max-h-96 overflow-y-auto">
+        {items.length === 0 ? (
+          <p className="text-xs text-slate-400 italic p-4 text-center">Bekleyen kayıt yok.</p>
+        ) : items.map(({ bed, index, item, days }, i) => (
+          <button key={item.id || i} onClick={() => onNavigateToBed(index)}
+            className="w-full flex items-center gap-2.5 px-3 py-2 hover:bg-slate-50 text-left border-b border-slate-50 last:border-0 transition-colors">
+            <span className="w-6 h-6 rounded bg-slate-100 text-slate-600 text-[10px] font-black flex items-center justify-center shrink-0">{index + 1}</span>
+            <div className="flex-1 min-w-0">
+              <div className="text-xs font-bold text-slate-800 truncate">{primary(item)}</div>
+              <div className="text-[10px] text-slate-400 truncate uppercase">{bed.name}</div>
+            </div>
+            <span className={`text-[10px] font-bold shrink-0 ${days >= 2 ? dayColor : 'text-slate-400'}`}>{days === 0 ? 'bugün' : days + ' gün'}</span>
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+
+  return (
+    <div className="p-4 sm:p-6 max-w-[1400px] mx-auto space-y-5">
+      {/* Yatan hasta sayısı */}
+      <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm flex items-center gap-4">
+        <div className="w-11 h-11 rounded-xl flex items-center justify-center bg-blue-50 text-blue-600"><BedDouble size={22} /></div>
+        <div className="shrink-0">
+          <div className="text-slate-500 text-xs font-medium">Yatan Hasta</div>
+          <div className="flex items-baseline gap-1.5">
+            <span className="text-2xl font-bold text-slate-900">{occupied.length}</span>
+            <span className="text-sm text-slate-400">/ {beds.length}</span>
+          </div>
+        </div>
+        <div className="flex-1 ml-4 hidden sm:block">
+          <div className="w-full bg-slate-100 rounded-full h-2">
+            <div className="bg-blue-600 h-2 rounded-full transition-all" style={{ width: `${beds.length ? (occupied.length / beds.length) * 100 : 0}%` }} />
+          </div>
+        </div>
+      </div>
+
+      {/* Bekleyen işler */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <PanelCard icon={Users} title="Bekleyen Konsültasyonlar" color="text-blue-600" bgColor="bg-blue-50"
+          items={pendingConsults} primary={c => c.department + ' konsültasyonu'} dayColor="text-rose-600" />
+        <PanelCard icon={CheckSquare} title="Açık Görevler" color="text-amber-600" bgColor="bg-amber-50"
+          items={openTasks} primary={t => t.text} dayColor="text-amber-700" />
+        <PanelCard icon={TestTube} title="Sonuçlanmamış Kültürler" color="text-orange-600" bgColor="bg-orange-50"
+          items={pendingCultures} primary={c => c.type + ' kültürü'} dayColor="text-rose-600" />
+      </div>
+    </div>
+  );
+};
+
+/* ================= YATIŞ MODALİ ================= */
+
+const AdmitModal = ({ bedIndex, onClose, onAdmit }) => {
+  const [isProcessing, setIsProcessing] = useState(false);
+  const [aiText, setAiText] = useState('');
+  const [showAiPanel, setShowAiPanel] = useState(false);
+  const fileInputRef = useRef(null);
+
+  const [name, setName] = useState('');
+  const [age, setAge] = useState('');
+  const [gender, setGender] = useState('M');
+  const [admissionDate, setAdmissionDate] = useState(todayStr());
+  const [fromEmergency, setFromEmergency] = useState(false);
+  const [antibiotics, setAntibiotics] = useState('');
+  const [extractedIkab, setExtractedIkab] = useState(null);
+  const [staticData, setStaticData] = useState(emptyStatic());
+  const [aiError, setAiError] = useState('');
+
+  const fillForm = (data) => {
+    if (data.name) setName(data.name);
+    if (data.age) setAge(String(data.age));
+    if (data.gender === 'M' || data.gender === 'F') setGender(data.gender);
+    const abx = data.antibiotics;
+    if (abx && abx !== 'null' && !/^(yok|belirtilmemiş)$/i.test(String(abx).trim())) setAntibiotics(String(abx));
+    if (data.ikab && data.ikab.result) setExtractedIkab({ result: data.ikab.result, date: data.ikab.date || todayStr() });
+    let history = data.historyDisease || '';
+    if (data.routineMeds && String(data.routineMeds).trim() && data.routineMeds !== 'null') {
+      history += (history ? '\n' : '') + 'Rutin ilaçlar: ' + data.routineMeds;
+    }
+    setStaticData(prev => ({
+      ...prev,
+      complaint: data.complaint || prev.complaint,
+      historyDisease: history || prev.historyDisease,
+      historySurgery: data.historySurgery || prev.historySurgery,
+      allergies: data.allergies || prev.allergies,
+      bloodGroup: data.bloodGroup || prev.bloodGroup,
+      asaScore: data.asaScore || prev.asaScore,
+      serology: data.serology || prev.serology,
+      operationName: data.operationName || prev.operationName,
+      operationDate: data.operationDate || prev.operationDate,
+      psa: (data.psa && data.psa !== 'null') ? String(data.psa) : prev.psa,
+      psaDate: (data.psaDate && data.psaDate !== 'null') ? data.psaDate : prev.psaDate,
+      admitDx: (data.admitDx && data.admitDx !== 'null') ? String(data.admitDx) : prev.admitDx
+    }));
+    if (data.admissionDate && data.admissionDate !== 'null') setAdmissionDate(data.admissionDate);
+    if (data.fromEmergency === true || data.fromEmergency === 'true') setFromEmergency(true);
+  };
+
+  const runExtraction = async (content) => {
+    setIsProcessing(true); setAiError('');
+    try {
+      const text = await callClaude(content);
+      fillForm(parseAIJson(text));
+      setShowAiPanel(false); setAiText('');
+    } catch (e) {
+      console.error(e);
+      setAiError(e.code === 'NO_KEY' ? NO_KEY_MSG : 'Belge analiz edilemedi. Metni kontrol edip tekrar deneyin veya formu elle doldurun.');
+    } finally { setIsProcessing(false); }
+  };
+
+  const handleTextExtract = () => {
+    if (!aiText.trim()) return;
+    runExtraction(`${EXTRACTION_PROMPT}\n\nAnaliz edilecek epikriz metni:\n"""${aiText}"""`);
+  };
+
+  const handleFileUpload = (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onloadend = () => {
+      const base64Data = String(reader.result).split(',')[1];
+      const isPdf = file.type === 'application/pdf';
+      const block = isPdf
+        ? { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: base64Data } }
+        : { type: 'image', source: { type: 'base64', media_type: file.type, data: base64Data } };
+      runExtraction([block, { type: 'text', text: EXTRACTION_PROMPT }]);
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const handleSubmit = () => {
+    if (!name.trim()) return;
+    const hasOp = (staticData.operationName || '').trim().length > 0;
+    const finalStatic = { ...staticData, operationDate: hasOp ? staticData.operationDate : '' };
+    const initialStatus = hasOp
+      ? (staticData.operationDate ? (daysElapsed(staticData.operationDate) >= 0 ? STATUS.POST_OP : STATUS.PRE_OP) : STATUS.PRE_OP)
+      : (fromEmergency ? STATUS.WATCH : STATUS.STABLE);
+    const abxList = antibiotics.trim() ? [{ id: Date.now().toString(), name: antibiotics.trim(), startDate: todayStr(), isActive: true }] : [];
+    const cultureList = extractedIkab ? [{ id: 'ikab' + Date.now(), type: 'İdrar', takenAt: extractedIkab.date, status: 'RESULTED', result: extractedIkab.result }] : [];
+    const p = {
+      ...newPatientShell(bedIndex + 1, name.trim()),
+      age: parseInt(age) || 0, gender, status: initialStatus,
+      admissionDate: new Date(admissionDate + 'T12:00:00').toISOString(),
+      fromEmergency,
+      staticData: finalStatic, antibiotics: abxList, cultures: cultureList
+    };
+    onAdmit(p);
+  };
+
+  return (
+    <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-2 sm:p-4 backdrop-blur-sm">
+      <div className="bg-white w-full max-w-3xl flex flex-col rounded-2xl shadow-2xl overflow-hidden max-h-[95vh]">
+        <div className="flex justify-between items-center p-4 border-b border-slate-100 shrink-0">
+          <div>
+            <h2 className="text-lg font-bold text-slate-800">Hasta Yatışı</h2>
+            <p className="text-xs text-slate-500">Yatak {bedIndex + 1}</p>
+          </div>
+          <button onClick={onClose} className="p-2 hover:bg-slate-100 rounded-full text-slate-500"><X size={22} /></button>
+        </div>
+
+        <div className="flex-1 overflow-y-auto">
+          {/* AI panel */}
+          <div className="p-4 bg-slate-50 border-b border-slate-100 space-y-3">
+            {!showAiPanel ? (
+              <div className="flex flex-col sm:flex-row gap-2">
+                <button onClick={() => setShowAiPanel(true)} disabled={isProcessing} className="flex-1 border-2 border-dashed border-indigo-200 bg-white hover:bg-indigo-50 rounded-xl p-3 flex items-center justify-center gap-2 text-sm font-semibold text-indigo-700 transition-colors">
+                  <Sparkles size={16} /> Epikriz metnini yapıştır — AI doldursun
+                </button>
+                <button onClick={() => !isProcessing && fileInputRef.current?.click()} disabled={isProcessing} className="flex-1 border-2 border-dashed border-indigo-200 bg-white hover:bg-indigo-50 rounded-xl p-3 flex items-center justify-center gap-2 text-sm font-semibold text-indigo-700 transition-colors">
+                  {isProcessing ? <Loader2 size={16} className="animate-spin" /> : <Upload size={16} />} PDF / Fotoğraf yükle
+                </button>
+                <input type="file" ref={fileInputRef} className="hidden" accept="image/jpeg,image/png,image/webp,application/pdf" onChange={handleFileUpload} disabled={isProcessing} />
+              </div>
+            ) : (
+              <div className="space-y-2">
+                <textarea value={aiText} onChange={e => setAiText(e.target.value)} rows={5} placeholder="Epikriz veya rapor metnini buraya yapıştırın..." className="w-full p-3 rounded-xl border border-indigo-200 bg-white text-sm outline-none focus:ring-2 focus:ring-indigo-400 font-mono" />
+                <div className="flex gap-2 justify-end">
+                  <button onClick={() => { setShowAiPanel(false); setAiError(''); }} className="px-4 py-2 text-sm font-bold text-slate-500 hover:bg-slate-100 rounded-xl">Vazgeç</button>
+                  <button onClick={handleTextExtract} disabled={isProcessing || !aiText.trim()} className="px-4 py-2 bg-indigo-600 text-white text-sm font-bold rounded-xl hover:bg-indigo-700 disabled:opacity-50 flex items-center gap-2">
+                    {isProcessing ? <Loader2 size={16} className="animate-spin" /> : <Sparkles size={16} />} Analiz Et
+                  </button>
+                </div>
+              </div>
+            )}
+            {isProcessing && !showAiPanel && <p className="text-xs text-indigo-600 font-medium flex items-center gap-2"><Loader2 size={14} className="animate-spin" /> Belge analiz ediliyor...</p>}
+            {aiError && <p className="text-xs text-rose-600 font-medium">{aiError}</p>}
+            <p className="text-[10px] text-slate-400">Not: AI çıkarımı yardımcı araçtır; doldurulan alanları kaydetmeden önce mutlaka doğrulayın.</p>
+          </div>
+
+          <div className="p-4 sm:p-6 space-y-6">
+            <div>
+              <h3 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-3">Kimlik & Operasyon</h3>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <Field required label="Ad Soyad" value={name} onChange={setName} />
+                <div className="grid grid-cols-3 gap-3">
+                  <Field label="Yaş" type="number" value={age} onChange={setAge} />
+                  <div className="flex flex-col gap-1.5">
+                    <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest px-1">Cinsiyet</label>
+                    <select value={gender} onChange={e => setGender(e.target.value)} className="px-3 py-2.5 rounded-xl border border-slate-200 bg-white text-sm font-bold outline-none focus:border-indigo-500">
+                      <option value="M">Erkek</option><option value="F">Kadın</option>
+                    </select>
+                  </div>
+                  <div className="flex flex-col gap-1.5">
+                    <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest px-1">ASA</label>
+                    <select value={staticData.asaScore} onChange={e => setStaticData({ ...staticData, asaScore: e.target.value })} className="px-3 py-2.5 rounded-xl border border-slate-200 bg-white text-sm font-bold outline-none focus:border-indigo-500">
+                      {ASA_SCORES.map(s => <option key={s} value={s}>{s}</option>)}
+                    </select>
+                  </div>
+                </div>
+                <Field label="Yatış Tarihi" type="date" value={admissionDate} onChange={setAdmissionDate} />
+                <div className="flex flex-col gap-1.5">
+                  <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest px-1">Yatış Şekli</label>
+                  <label className={`flex items-center gap-2.5 cursor-pointer px-3 py-2.5 rounded-xl border transition-all ${fromEmergency ? 'border-rose-300 bg-rose-50' : 'border-slate-200 bg-white hover:border-rose-200'}`}>
+                    <div className={`w-5 h-5 rounded-md border-2 flex items-center justify-center transition-all shrink-0 ${fromEmergency ? 'bg-rose-600 border-rose-600' : 'bg-white border-slate-300'}`}>
+                      <input type="checkbox" checked={fromEmergency} onChange={e => setFromEmergency(e.target.checked)} className="hidden" />
+                      {fromEmergency && <CheckCircle2 size={13} className="text-white" />}
+                    </div>
+                    <span className={`text-sm font-bold ${fromEmergency ? 'text-rose-700' : 'text-slate-500'}`}>Acilden Yatış</span>
+                  </label>
+                </div>
+                <Field label="Planlanan / Yapılan İşlem" value={staticData.operationName} onChange={v => setStaticData({ ...staticData, operationName: v })} placeholder="TUR-P, URS... (cerrahi yoksa boş bırakın)" />
+                <Field label="Plan / Operasyon Tarihi" type="date" value={staticData.operationDate} onChange={v => setStaticData({ ...staticData, operationDate: v })} />
+                <div className="md:col-span-2">
+                  <Field label="Kısa Yatış Tanısı (çıktıda görünür)" value={staticData.admitDx || ''} onChange={v => setStaticData({ ...staticData, admitDx: v })} placeholder="örn: piyelonefrit, hematüri, ürosepsis" />
+                </div>
+              </div>
+            </div>
+
+            <div>
+              <h3 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-3">Tıbbi Öykü & Pre-Op</h3>
+              <div className="space-y-4">
+                <div className="bg-orange-50 p-4 rounded-xl border border-orange-100 grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <Field label="Seroloji (HBsAg, Anti-HCV, HIV)" value={staticData.serology} onChange={v => setStaticData({ ...staticData, serology: v })} placeholder="Negatif" />
+                  {extractedIkab ? (
+                    <div className="flex flex-col gap-1.5">
+                      <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest px-1">İdrar Kültürü (AI ile bulundu)</label>
+                      <div className="bg-white p-2.5 rounded-xl border border-orange-200 text-orange-800 text-xs font-bold flex items-center gap-2">
+                        <Sparkles size={13} /> {extractedIkab.result} <span className="opacity-60 font-medium">({extractedIkab.date})</span>
+                        <button onClick={() => setExtractedIkab(null)} className="ml-auto text-orange-400 hover:text-rose-600"><X size={14} /></button>
+                      </div>
+                    </div>
+                  ) : (
+                    <Field label="Kan Grubu" value={staticData.bloodGroup} onChange={v => setStaticData({ ...staticData, bloodGroup: v })} placeholder="A Rh(+)" />
+                  )}
+                </div>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <TextAreaField label="Yatış Nedeni & Öykü" value={staticData.complaint} onChange={v => setStaticData({ ...staticData, complaint: v })} placeholder="Şikayet, hikaye, fizik muayene özeti..." />
+                  <TextAreaField label="Kronik Hastalıklar & Rutin İlaçlar" value={staticData.historyDisease} onChange={v => setStaticData({ ...staticData, historyDisease: v })} placeholder="HT, DM, KOAH..." />
+                  <Field label="Geçirilmiş Ameliyatlar" value={staticData.historySurgery} onChange={v => setStaticData({ ...staticData, historySurgery: v })} />
+                  <Field label="Alerjiler" value={staticData.allergies} onChange={v => setStaticData({ ...staticData, allergies: v })} placeholder="Yok" />
+                  <Field label="Aktif Antibiyotik (varsa)" value={antibiotics} onChange={setAntibiotics} placeholder="Seftriakson 1x2 gr" />
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div className="p-4 border-t border-slate-100 flex justify-end gap-3 shrink-0 bg-white">
+          <button onClick={onClose} className="px-5 py-2.5 rounded-xl font-bold text-slate-500 hover:bg-slate-50">İptal</button>
+          <button onClick={handleSubmit} disabled={!name.trim()} className="px-6 py-2.5 bg-indigo-600 text-white rounded-xl font-bold shadow-lg shadow-indigo-200 hover:bg-indigo-700 disabled:opacity-40 flex items-center gap-2">
+            <Save size={16} /> Yatışı Kaydet
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+/* ================= HASTA DETAY ================= */
+
+const PatientDetail = ({ bedIndex, patient, onBack, onSave, onDischarge }) => {
+  const TODAY = todayStr();
+  const [currentRound, setCurrentRound] = useState(() => patient.rounds?.[TODAY] || emptyRound());
+  const [status, setStatus] = useState(patient.status);
+  const [tasks, setTasks] = useState(patient.tasks || []);
+  const [newTask, setNewTask] = useState('');
+  const [activeTab, setActiveTab] = useState('plan');
+  const [name, setName] = useState(patient.name);
+  const [age, setAge] = useState(patient.age);
+  const [staticData, setStaticData] = useState(patient.staticData);
+  const [visitNotes, setVisitNotes] = useState(patient.visitNotes || '');
+  const [antibiotics, setAntibiotics] = useState(patient.antibiotics || []);
+  const [newAbxName, setNewAbxName] = useState('');
+  const [cultures, setCultures] = useState(patient.cultures || []);
+  const [newCultureType, setNewCultureType] = useState('İdrar');
+  const [consultations, setConsultations] = useState(patient.consultations || []);
+  const [newConsultDept, setNewConsultDept] = useState('');
+  const [nephRight, setNephRight] = useState(patient.nephrostomyRight || false);
+  const [nephLeft, setNephLeft] = useState(patient.nephrostomyLeft || false);
+  const [dressingDate, setDressingDate] = useState(patient.lastNephrostomyDressingDate || patient.staticData.operationDate || TODAY);
+  const [assignedTo, setAssignedTo] = useState(patient.assignedTo || '');
+  const [labsPreop, setLabsPreop] = useState({ ...emptyLabPanel(), ...(patient.labsPreop || {}) });
+  const [labsPostop, setLabsPostop] = useState({ ...emptyLabPanel(), ...(patient.labsPostop || {}) });
+  const [dailyLabs, setDailyLabs] = useState(
+    patient.dailyLabsRequired ?? Object.values(patient.rounds || {}).some(r => Object.values(r.labs || {}).some(v => v && String(v).trim()))
+  );
+  const [labTab, setLabTab] = useState((patient.staticData.operationName || '').trim() && patient.staticData.operationDate && daysElapsed(patient.staticData.operationDate) >= 0 ? 'postop' : 'preop');
+  const [admitDate, setAdmitDate] = useState((patient.admissionDate || '').split('T')[0] || todayStr());
+  const [emergAdmit, setEmergAdmit] = useState(!!patient.fromEmergency);
+  const [epikriz, setEpikriz] = useState('');
+  const [epikrizLoading, setEpikrizLoading] = useState(false);
+  const [confirmDischarge, setConfirmDischarge] = useState(false);
+
+  const abxDay = (start) => Math.max(1, daysElapsed(start) + 1);
+  const autoSaveReadyRef = useRef(false);
+  const autoSaveTimerRef = useRef(null);
+  const onSaveRef = useRef(onSave);
+  const patientRef = useRef(patient);
+
+  useEffect(() => { onSaveRef.current = onSave; }, [onSave]);
+  useEffect(() => { patientRef.current = patient; }, [patient]);
+
+  const buildUpdatedPatient = useCallback(() => {
+    const basePatient = patientRef.current;
+    return {
+      ...basePatient, name, age, staticData, visitNotes, antibiotics, cultures, consultations,
+      status, tasks, assignedTo,
+      labsPreop, labsPostop, dailyLabsRequired: dailyLabs,
+      admissionDate: admitDate ? new Date(admitDate + 'T12:00:00').toISOString() : basePatient.admissionDate,
+      fromEmergency: emergAdmit,
+      nephrostomyRight: nephRight, nephrostomyLeft: nephLeft,
+      lastNephrostomyDressingDate: (nephRight || nephLeft) ? dressingDate : '',
+      rounds: { ...(basePatient.rounds || {}), [TODAY]: { ...currentRound, date: TODAY } }
+    };
+  }, [
+    name, age, staticData, visitNotes, antibiotics, cultures, consultations,
+    status, tasks, assignedTo, labsPreop, labsPostop, dailyLabs, admitDate, emergAdmit,
+    nephRight, nephLeft, dressingDate, currentRound, TODAY
+  ]);
+
+  const saveOnly = useCallback(() => {
+    onSaveRef.current(bedIndex, buildUpdatedPatient());
+  }, [bedIndex, buildUpdatedPatient]);
+
+  useEffect(() => {
+    if (!autoSaveReadyRef.current) {
+      autoSaveReadyRef.current = true;
+      return;
+    }
+    if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current);
+    autoSaveTimerRef.current = setTimeout(() => { saveOnly(); }, 600);
+    return () => { if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current); };
+  }, [saveOnly]);
+
+  const handleBack = () => {
+    if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current);
+    saveOnly();
+    onBack();
+  };
+
+  const handleSave = () => {
+    handleBack();
+  };
+
+  const updateField = (section, field, value) =>
+    setCurrentRound(prev => ({ ...prev, [section]: { ...prev[section], [field]: value } }));
+
+  const generateEpikriz = async () => {
+    setEpikrizLoading(true); setEpikriz('');
+    try {
+      const ctx = JSON.stringify({ name, age, gender: patient.gender, staticData, antibiotics, cultures, consultations, visitNotes, rounds: patient.rounds });
+      const text = await callClaude(
+        `Sen bir üroloji asistanısın. Aşağıdaki hasta verilerini kullanarak resmi bir hastane çıkış özeti (epikriz) taslağı yaz. Dil Türkçe olsun. Yapı: 1) Tanı ve İşlem 2) Öykü ve Özgeçmiş 3) Klinik Seyir 4) Öneriler. İlaç dozları ve öneriler için "hekim tarafından doğrulanmalıdır" notu ekle.\n\nHasta verileri: ${ctx}`
+      );
+      setEpikriz(text);
+    } catch (e) { setEpikriz(e.code === 'NO_KEY' ? NO_KEY_MSG : 'Epikriz oluşturulamadı. Lütfen tekrar deneyin.'); }
+    finally { setEpikrizLoading(false); }
+  };
+
+  const TABS = [
+    { id: 'plan', icon: FileText, label: 'Vizit & Tedavi' },
+    { id: 'vitals', icon: HeartPulse, label: 'Vital & Sıvı' },
+    { id: 'labs', icon: FlaskConical, label: 'Lab & Kültür' },
+    { id: 'consults', icon: Users, label: 'Konsültasyon' },
+    { id: 'info', icon: User, label: 'Künye & Öykü' },
+  ];
+
+  return (
+    <div className="flex flex-col h-full bg-slate-50 sm:rounded-2xl sm:shadow-xl sm:border border-slate-200 overflow-hidden">
+      {/* Başlık */}
+      <div className="bg-white border-b sticky top-0 z-30 shrink-0">
+        <div className="flex items-center justify-between p-3 sm:p-4 gap-2">
+          <div className="flex items-center gap-2 sm:gap-4 min-w-0">
+            <button onClick={handleBack} className="p-2 hover:bg-slate-100 rounded-full text-slate-500 shrink-0"><ArrowLeft size={22} /></button>
+            <div className="min-w-0">
+              <div className="flex items-center gap-2 flex-wrap">
+                <h1 className="font-bold text-base sm:text-xl text-slate-800 truncate">{name}</h1>
+                <span className="bg-indigo-600 text-white text-[10px] font-black px-2 py-0.5 rounded uppercase shrink-0">Yatak {bedIndex + 1}</span>
+              </div>
+              <p className="text-[10px] sm:text-xs font-bold text-slate-400 uppercase tracking-wide truncate">
+                {staticData.operationName || 'Cerrahi plan yok'} • <span className="text-indigo-600">{stayOrPodText(staticData.operationName, staticData.operationDate, patient.admissionDate)}</span>
+              </p>
+            </div>
+          </div>
+          <div className="flex items-center gap-2 shrink-0">
+            <select value={status} onChange={e => setStatus(e.target.value)} className="hidden sm:block px-3 py-2 rounded-xl border border-slate-200 bg-white text-xs font-bold outline-none focus:border-indigo-500">
+              {Object.keys(STATUS_LABELS).map(s => <option key={s} value={s}>{STATUS_LABELS[s]}</option>)}
+            </select>
+            <button onClick={handleSave} className="bg-emerald-600 hover:bg-emerald-700 text-white px-4 sm:px-6 py-2.5 rounded-xl font-bold text-sm flex items-center gap-2 shadow-lg shadow-emerald-100 active:scale-95 transition-all">
+              <Save size={16} /> <span className="hidden sm:inline">Kaydet</span>
+            </button>
+          </div>
+        </div>
+        <div className="sm:hidden px-3 pb-2">
+          <select value={status} onChange={e => setStatus(e.target.value)} className="w-full px-3 py-2 rounded-xl border border-slate-200 bg-white text-xs font-bold outline-none">
+            {Object.keys(STATUS_LABELS).map(s => <option key={s} value={s}>{STATUS_LABELS[s]}</option>)}
+          </select>
+        </div>
+        <div className="flex border-t overflow-x-auto bg-white" style={{ scrollbarWidth: 'none' }}>
+          {TABS.map(tab => (
+            <button key={tab.id} onClick={() => setActiveTab(tab.id)}
+              className={`flex-1 min-w-[100px] py-3 flex items-center justify-center gap-1.5 text-[10px] sm:text-[11px] font-black border-b-2 transition-all uppercase tracking-tighter ${activeTab === tab.id ? 'border-indigo-600 text-indigo-600 bg-indigo-50/30' : 'border-transparent text-slate-400 hover:text-slate-600'}`}>
+              <tab.icon size={15} /> {tab.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div className="flex-1 overflow-y-auto p-3 sm:p-6 space-y-6 pb-24">
+        {/* ==== VİZİT & TEDAVİ ==== */}
+        {activeTab === 'plan' && (
+          <div className="space-y-6">
+            <SectionTitle icon={MessageSquareQuote} title="Günlük Vizit Notu" color="text-indigo-600" />
+            <div className="bg-white rounded-2xl border border-slate-200 p-4 sm:p-5 shadow-sm">
+              <textarea className="w-full p-3 border border-slate-200 rounded-xl bg-slate-50 outline-none focus:bg-white focus:ring-2 focus:ring-indigo-400 min-h-[120px] text-sm font-medium leading-relaxed"
+                placeholder="Bugünkü klinik seyir, vizit notları ve plan..."
+                value={visitNotes} onChange={e => setVisitNotes(e.target.value)} />
+              <div className="mt-2 text-[10px] text-slate-400 font-bold uppercase flex items-center gap-1">
+                <Clock size={11} /> {new Date().toLocaleDateString('tr-TR')} — bugünkü vizite kaydedilir
+              </div>
+            </div>
+
+            <SectionTitle icon={CheckSquare} title="Görev Listesi" color="text-amber-600" />
+            <div className="bg-white rounded-2xl border border-slate-200 p-4 sm:p-5 space-y-3 shadow-sm">
+              <div className="flex gap-2">
+                <input className="flex-1 px-3 py-2.5 rounded-xl border border-slate-200 bg-slate-50 focus:bg-white focus:ring-2 focus:ring-amber-400 outline-none text-sm font-medium"
+                  placeholder="Yeni görev (örn: Sonda çekilecek, USG istenecek)..." value={newTask}
+                  onChange={e => setNewTask(e.target.value)}
+                  onKeyDown={e => { if (e.key === 'Enter' && newTask.trim()) { setTasks([...tasks, { id: Date.now().toString(), text: newTask.trim(), completed: false, createdAt: new Date().toISOString() }]); setNewTask(''); } }} />
+                <button onClick={() => { if (newTask.trim()) { setTasks([...tasks, { id: Date.now().toString(), text: newTask.trim(), completed: false, createdAt: new Date().toISOString() }]); setNewTask(''); } }}
+                  className="bg-amber-500 text-white px-4 rounded-xl hover:bg-amber-600"><Plus size={18} /></button>
+              </div>
+              {tasks.length === 0 ? <p className="text-xs text-slate-400 italic px-1">Görev yok.</p> : tasks.map(t => (
+                <div key={t.id} className="flex items-center gap-3 p-2.5 bg-slate-50 rounded-xl border border-slate-100">
+                  <input type="checkbox" checked={t.completed} onChange={() => setTasks(tasks.map(x => x.id === t.id ? { ...x, completed: !x.completed } : x))} className="w-5 h-5 rounded text-emerald-600" />
+                  <span className={`flex-1 text-sm font-medium ${t.completed ? 'line-through text-slate-400' : 'text-slate-700'}`}>{t.text}</span>
+                  <button onClick={() => setTasks(tasks.filter(x => x.id !== t.id))} className="text-slate-300 hover:text-red-500"><Trash2 size={15} /></button>
+                </div>
+              ))}
+            </div>
+
+            <SectionTitle icon={ShieldAlert} title="Nefrostomi Takibi" color="text-rose-600" />
+            <div className="bg-white rounded-2xl border border-slate-200 p-4 sm:p-5 flex flex-col md:flex-row md:items-center gap-5 shadow-sm">
+              <div className="flex gap-6">
+                {[['SAĞ', nephRight, setNephRight], ['SOL', nephLeft, setNephLeft]].map(([side, val, setter]) => (
+                  <label key={side} className="flex items-center gap-2.5 cursor-pointer">
+                    <div className={`w-6 h-6 rounded-md border-2 flex items-center justify-center transition-all ${val ? 'bg-rose-600 border-rose-600' : 'bg-white border-slate-200'}`}>
+                      <input type="checkbox" checked={val} onChange={e => setter(e.target.checked)} className="hidden" />
+                      {val && <CheckCircle2 size={15} className="text-white" />}
+                    </div>
+                    <span className={`text-sm font-black uppercase ${val ? 'text-rose-700' : 'text-slate-500'}`}>{side} Nefrostomi</span>
+                  </label>
+                ))}
+              </div>
+              {(nephRight || nephLeft) && (
+                <div className="flex flex-col sm:flex-row sm:items-end gap-3 border-t md:border-t-0 md:border-l border-slate-100 pt-4 md:pt-0 md:pl-6 flex-1">
+                  <Field label="Son Pansuman Tarihi" type="date" value={dressingDate} onChange={setDressingDate} />
+                  <button onClick={() => setDressingDate(TODAY)} className="px-3 py-2.5 bg-rose-50 text-rose-700 border border-rose-200 rounded-xl text-xs font-bold hover:bg-rose-100 whitespace-nowrap">Bugün Yapıldı</button>
+                  <div className={`px-3 py-2 rounded-xl text-xs font-bold flex items-center gap-1.5 border ${daysElapsed(dressingDate) >= 3 ? 'bg-rose-50 text-rose-700 border-rose-200' : 'bg-emerald-50 text-emerald-700 border-emerald-200'}`}>
+                    <Clock size={13} /> {daysElapsed(dressingDate)} gün önce
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <SectionTitle icon={Pill} title="Antibiyotik Takibi" color="text-violet-600" />
+            <div className="bg-white rounded-2xl border border-slate-200 p-4 sm:p-5 space-y-4 shadow-sm">
+              <div className="flex gap-2">
+                <input className="flex-1 px-3 py-2.5 rounded-xl border border-slate-200 bg-slate-50 focus:bg-white focus:ring-2 focus:ring-violet-400 outline-none text-sm font-medium"
+                  placeholder="İlaç ve doz (örn: Meropenem 3x1 gr)" value={newAbxName} onChange={e => setNewAbxName(e.target.value)} />
+                <button onClick={() => { if (newAbxName.trim()) { setAntibiotics([...antibiotics, { id: Date.now().toString(), name: newAbxName.trim(), startDate: TODAY, isActive: true }]); setNewAbxName(''); } }}
+                  className="bg-violet-600 text-white px-4 rounded-xl hover:bg-violet-700"><Plus size={18} /></button>
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                {antibiotics.map(abx => (
+                  <div key={abx.id} className={`p-3.5 border rounded-2xl flex flex-col gap-2.5 transition-colors ${abx.isActive ? 'bg-white border-slate-200 hover:border-violet-300' : 'bg-slate-50 border-slate-100 opacity-70'}`}>
+                    <div className="flex justify-between items-start">
+                      <div className="flex items-center gap-2.5">
+                        <div className={`p-1.5 rounded-lg ${abx.isActive ? 'bg-violet-100 text-violet-600' : 'bg-slate-200 text-slate-400'}`}><Pill size={16} /></div>
+                        <span className={`font-bold uppercase text-xs ${abx.isActive ? 'text-slate-800' : 'text-slate-400 line-through'}`}>{abx.name}</span>
+                      </div>
+                      <button onClick={() => setAntibiotics(antibiotics.filter(a => a.id !== abx.id))} className="text-slate-300 hover:text-red-500"><Trash2 size={15} /></button>
+                    </div>
+                    <div className="flex items-center justify-between flex-wrap gap-2 pt-2 border-t border-slate-100">
+                      <input type="date" value={abx.startDate} onChange={e => setAntibiotics(antibiotics.map(a => a.id === abx.id ? { ...a, startDate: e.target.value } : a))}
+                        className="bg-slate-50 border border-slate-200 rounded-lg px-2 py-1 text-xs font-bold outline-none" />
+                      <div className="flex items-center gap-2">
+                        {abx.isActive && <span className="bg-violet-600 text-white px-2.5 py-1 rounded-lg text-[10px] font-black uppercase">{abxDay(abx.startDate)}. GÜN</span>}
+                        <button onClick={() => setAntibiotics(antibiotics.map(a => a.id === abx.id ? { ...a, isActive: !a.isActive, endDate: a.isActive ? TODAY : undefined } : a))}
+                          className={`px-2.5 py-1 rounded-lg text-[10px] font-bold border ${abx.isActive ? 'text-slate-500 border-slate-200 hover:bg-slate-50' : 'text-emerald-700 border-emerald-200 bg-emerald-50'}`}>
+                          {abx.isActive ? 'Sonlandır' : 'Yeniden Başlat'}
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ==== VİTAL & SIVI ==== */}
+        {activeTab === 'vitals' && (
+          <div className="space-y-6">
+            <SectionTitle icon={HeartPulse} title="Vital Bulgular (Bugün)" color="text-red-600" />
+            <div className="bg-white rounded-2xl border border-slate-200 p-4 sm:p-6 shadow-sm grid grid-cols-2 sm:grid-cols-4 gap-4">
+              <Field label="Ateş (°C)" value={currentRound.vitals.temp} onChange={v => updateField('vitals', 'temp', v)} placeholder="36.8" />
+              <Field label="Nabız (/dk)" value={currentRound.vitals.pulse} onChange={v => updateField('vitals', 'pulse', v)} placeholder="78" />
+              <Field label="Tansiyon" value={currentRound.vitals.bp} onChange={v => updateField('vitals', 'bp', v)} placeholder="120/80" />
+              <Field label="SpO₂ (%)" value={currentRound.vitals.sats} onChange={v => updateField('vitals', 'sats', v)} placeholder="98" />
+            </div>
+
+            <SectionTitle icon={Droplet} title="Aldığı – Çıkardığı & Dren" color="text-cyan-600" />
+            <div className="bg-white rounded-2xl border border-slate-200 p-4 sm:p-6 shadow-sm space-y-6">
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                <Field label="Oral Alım (ml)" value={currentRound.io.oral} onChange={v => updateField('io', 'oral', v)} />
+                <Field label="IV Sıvı (ml)" value={currentRound.io.ivFluids} onChange={v => updateField('io', 'ivFluids', v)} />
+                <Field label="İdrar (ml)" value={currentRound.io.urineOutput} onChange={v => updateField('io', 'urineOutput', v)} />
+                <Field label="İdrar Rengi" value={currentRound.io.urineDescription} onChange={v => updateField('io', 'urineDescription', v)} placeholder="Berrak, pembe, vişne..." />
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-4 border-t border-slate-100">
+                <Field label="Dren 1 (miktar/renk)" value={currentRound.io.drain1} onChange={v => updateField('io', 'drain1', v)} placeholder="100 ml serohemorajik" />
+                <Field label="Dren 2 (miktar/renk)" value={currentRound.io.drain2} onChange={v => updateField('io', 'drain2', v)} />
+              </div>
+              <label className="flex items-center gap-2.5 cursor-pointer pt-2">
+                <input type="checkbox" checked={currentRound.io.bowel} onChange={e => updateField('io', 'bowel', e.target.checked)} className="w-5 h-5 rounded text-emerald-600" />
+                <span className="text-sm font-bold text-slate-600">Gaita / Gaz çıkışı var</span>
+              </label>
+            </div>
+
+            <SectionTitle icon={Pill} title="Analjezi & Antikoagülan" color="text-slate-600" />
+            <div className="bg-white rounded-2xl border border-slate-200 p-4 sm:p-6 shadow-sm grid grid-cols-1 sm:grid-cols-3 gap-4">
+              <Field label="Analjezik" value={currentRound.meds.analgesic} onChange={v => updateField('meds', 'analgesic', v)} placeholder="Parasetamol 3x1 gr IV" />
+              <Field label="Antikoagülan / DMAH" value={currentRound.meds.anticoagulant} onChange={v => updateField('meds', 'anticoagulant', v)} placeholder="Enoksaparin 1x0.4 SC" />
+              <Field label="Son Antikoagülan Saati" value={currentRound.meds.lastAnticoagulantTime} onChange={v => updateField('meds', 'lastAnticoagulantTime', v)} placeholder="22:00" />
+            </div>
+          </div>
+        )}
+
+        {/* ==== LAB & KÜLTÜR ==== */}
+        {activeTab === 'labs' && (
+          <div className="space-y-6">
+            <SectionTitle icon={FlaskConical} title="Laboratuvar" color="text-emerald-600" />
+            <div className="bg-white rounded-2xl border border-slate-200 p-4 sm:p-6 shadow-sm space-y-5">
+              <div className="flex gap-2 flex-wrap">
+                {[['preop', 'Preop'], ['postop', 'Post-op'], ['gunluk', 'Günlük Takip']].map(([id, lbl]) => (
+                  <button key={id} onClick={() => setLabTab(id)}
+                    className={`px-4 py-2 rounded-xl text-xs font-black uppercase tracking-wide border transition-all ${labTab === id ? 'bg-emerald-600 text-white border-emerald-600 shadow-md shadow-emerald-100' : 'bg-white text-slate-500 border-slate-200 hover:border-emerald-300'}`}>
+                    {lbl}{id === 'gunluk' && dailyLabs ? ' ✓' : ''}
+                  </button>
+                ))}
+              </div>
+
+              {labTab === 'preop' && (
+                <div className="space-y-3">
+                  <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Ameliyat öncesi bazal değerler — bir kez girilir</p>
+                  <LabPanelGrid values={labsPreop} onChange={setLabsPreop} dateLabel="Preop Tarih" />
+                </div>
+              )}
+
+              {labTab === 'postop' && (
+                <div className="space-y-3">
+                  <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Ameliyat sonrası kontrol değerleri</p>
+                  <LabPanelGrid values={labsPostop} onChange={setLabsPostop} dateLabel="Postop Tarih" />
+                </div>
+              )}
+
+              {labTab === 'gunluk' && !dailyLabs && (
+                <div className="flex flex-col items-center gap-3 py-6 text-center">
+                  <p className="text-sm text-slate-500 max-w-md">Bu hastada günlük kan takibi gereksinimi tanımlanmadı. Rutin dışı günlük hemogram/biyokimya takibi gerekiyorsa aşağıdan açabilirsiniz.</p>
+                  <button onClick={() => setDailyLabs(true)}
+                    className="px-5 py-2.5 bg-emerald-600 text-white rounded-xl text-sm font-bold hover:bg-emerald-700 shadow-lg shadow-emerald-100 flex items-center gap-2">
+                    <CheckCircle2 size={16} /> Günlük kan takibini aç
+                  </button>
+                </div>
+              )}
+
+              {labTab === 'gunluk' && dailyLabs && (
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between flex-wrap gap-2">
+                    <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest flex items-center gap-1">
+                      <Clock size={11} /> Bugünün değerleri ({new Date().toLocaleDateString('tr-TR')}) — her gün ayrı kaydedilir
+                    </p>
+                    <button onClick={() => setDailyLabs(false)} className="text-[10px] font-bold text-slate-400 hover:text-rose-600 uppercase underline">Günlük takibi kapat</button>
+                  </div>
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+                    {LAB_FIELDS.map(([lbl, key]) => (
+                      <Field key={key} label={lbl} value={currentRound.labs[key] || ''} onChange={v => updateField('labs', key, v)} />
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <SectionTitle icon={TestTube} title="Kültür Takibi" color="text-amber-600" />
+            <div className="bg-white rounded-2xl border border-slate-200 p-4 sm:p-5 space-y-4 shadow-sm">
+              <div className="flex gap-2">
+                <select className="flex-1 px-3 py-2.5 rounded-xl border border-slate-200 bg-slate-50 text-sm font-bold outline-none focus:ring-2 focus:ring-amber-400" value={newCultureType} onChange={e => setNewCultureType(e.target.value)}>
+                  {CULTURE_TYPES.map(t => <option key={t} value={t}>{t} Kültürü</option>)}
+                </select>
+                <button onClick={() => setCultures([...cultures, { id: Date.now().toString(), type: newCultureType, takenAt: TODAY, status: 'PENDING' }])}
+                  className="bg-amber-600 text-white px-4 rounded-xl hover:bg-amber-700"><Plus size={18} /></button>
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                {cultures.map(c => (
+                  <div key={c.id} className={`p-4 rounded-2xl border ${c.status === 'RESULTED' ? 'border-emerald-200 bg-emerald-50/30' : 'border-slate-200 bg-white'}`}>
+                    <div className="flex justify-between items-center mb-2">
+                      <span className="font-black text-xs flex items-center gap-2 uppercase text-slate-700">
+                        <TestTube size={15} className={c.status === 'RESULTED' ? 'text-emerald-500' : 'text-amber-500'} /> {c.type} Kültürü
+                        {c.status === 'PENDING' && <span className="text-amber-600 font-bold normal-case">({daysElapsed(c.takenAt)} gündür bekliyor)</span>}
+                      </span>
+                      <button onClick={() => setCultures(cultures.filter(x => x.id !== c.id))} className="text-slate-300 hover:text-red-500"><Trash2 size={15} /></button>
+                    </div>
+                    <div className="space-y-3">
+                      <div className="flex items-center justify-between text-[10px] font-black text-slate-400 uppercase flex-wrap gap-2">
+                        <div className="flex items-center gap-2">Alındı: <input type="date" value={c.takenAt} onChange={e => setCultures(cultures.map(x => x.id === c.id ? { ...x, takenAt: e.target.value } : x))} className="bg-slate-50 border border-slate-200 rounded px-2 py-1 text-slate-800 font-black" /></div>
+                        <label className="flex items-center gap-1.5 cursor-pointer">
+                          <input type="checkbox" checked={c.status === 'RESULTED'} onChange={() => setCultures(cultures.map(x => x.id === c.id ? { ...x, status: x.status === 'PENDING' ? 'RESULTED' : 'PENDING' } : x))} className="w-4 h-4 rounded text-emerald-600" /> Sonuçlandı
+                        </label>
+                      </div>
+                      {c.status === 'RESULTED' && (
+                        <input className="w-full text-xs px-3 py-2 border border-slate-200 rounded-xl bg-white outline-none focus:ring-2 focus:ring-emerald-400 font-bold"
+                          placeholder="Sonuç (örn: Üreme yok / E.coli 10^5 ESBL+)" value={c.result || ''}
+                          onChange={e => setCultures(cultures.map(x => x.id === c.id ? { ...x, result: e.target.value } : x))} />
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ==== KONSÜLTASYON ==== */}
+        {activeTab === 'consults' && (
+          <div className="space-y-6">
+            <SectionTitle icon={Users} title="Konsültasyon Yönetimi" color="text-blue-600" />
+            <div className="bg-white rounded-2xl border border-slate-200 p-4 sm:p-5 space-y-4 shadow-sm">
+              <div className="flex gap-2">
+                <input className="flex-1 px-3 py-2.5 rounded-xl border border-slate-200 bg-slate-50 focus:bg-white focus:ring-2 focus:ring-blue-500 outline-none text-sm font-medium"
+                  placeholder="Bölüm adı (Kardiyoloji, Enfeksiyon...)" value={newConsultDept} onChange={e => setNewConsultDept(e.target.value)} />
+                <button onClick={() => { if (newConsultDept.trim()) { setConsultations([...consultations, { id: Date.now().toString(), department: newConsultDept.trim(), requestDate: TODAY, status: 'PENDING' }]); setNewConsultDept(''); } }}
+                  className="bg-blue-600 text-white px-4 rounded-xl hover:bg-blue-700"><Plus size={18} /></button>
+              </div>
+              {consultations.map(c => (
+                <div key={c.id} className={`p-4 border rounded-2xl bg-white ${c.status === 'RESULTED' ? 'border-emerald-200' : 'border-slate-200'}`}>
+                  <div className="flex justify-between items-start mb-3">
+                    <div className="flex items-center gap-2.5">
+                      <div className={`p-1.5 rounded-lg ${c.status === 'RESULTED' ? 'bg-emerald-100 text-emerald-600' : 'bg-blue-100 text-blue-600'}`}><Users size={17} /></div>
+                      <div>
+                        <div className="font-black text-slate-800 text-sm uppercase">{c.department}</div>
+                        <div className="text-[10px] text-slate-400 font-bold uppercase">Talep: {c.requestDate} {c.status === 'PENDING' && daysElapsed(c.requestDate) >= 1 ? `• ${daysElapsed(c.requestDate)} gündür bekliyor` : ''}</div>
+                      </div>
+                    </div>
+                    <button onClick={() => setConsultations(consultations.filter(x => x.id !== c.id))} className="text-slate-300 hover:text-red-500"><Trash2 size={15} /></button>
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-[180px_1fr] gap-3 items-end">
+                    <Field
+                      label="Konsültasyon Tarihi"
+                      type="date"
+                      value={c.requestDate || TODAY}
+                      onChange={v => setConsultations(consultations.map(x => x.id === c.id ? { ...x, requestDate: v } : x))}
+                    />
+                    <label className="flex items-center gap-2.5 text-xs font-black text-slate-500 uppercase cursor-pointer pb-2.5">
+                      <input type="checkbox" checked={c.status === 'RESULTED'} onChange={() => setConsultations(consultations.map(x => x.id === c.id ? { ...x, status: x.status === 'PENDING' ? 'RESULTED' : 'PENDING' } : x))} className="w-5 h-5 rounded text-emerald-600" />
+                      {c.status === 'RESULTED' ? 'Cevap Geldi' : 'Cevap Bekleniyor'}
+                    </label>
+                  </div>
+                  {c.status === 'RESULTED' && (
+                    <textarea className="mt-3 w-full text-sm p-3 border border-slate-200 rounded-xl bg-slate-50 outline-none focus:bg-white focus:ring-2 focus:ring-emerald-400 min-h-[80px]"
+                      placeholder="Konsültan önerisi..." value={c.result || ''}
+                      onChange={e => setConsultations(consultations.map(x => x.id === c.id ? { ...x, result: e.target.value } : x))} />
+                  )}
+                </div>
+              ))}
+              {consultations.length === 0 && <p className="text-xs text-slate-400 italic px-1">Konsültasyon kaydı yok.</p>}
+            </div>
+          </div>
+        )}
+
+        {/* ==== KÜNYE ==== */}
+        {activeTab === 'info' && (
+          <div className="max-w-4xl mx-auto space-y-6">
+            <div className="bg-white rounded-2xl border border-slate-200 p-4 sm:p-6 shadow-sm space-y-6">
+              <div className="flex items-center gap-3 border-b border-slate-50 pb-4">
+                <div className="p-3 bg-slate-50 rounded-2xl text-slate-400"><User size={24} /></div>
+                <div>
+                  <h3 className="text-lg font-black text-slate-800 uppercase tracking-tighter">Hasta Künyesi & Sabit Bilgiler</h3>
+                  <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest">Yatış: {new Date(patient.admissionDate).toLocaleDateString('tr-TR')}</p>
+                </div>
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <Field label="Ad Soyad" value={name} onChange={setName} />
+                <Field label="Yaş" type="number" value={String(age)} onChange={v => setAge(parseInt(v) || 0)} />
+                <Field label="Yatış Tarihi" type="date" value={admitDate} onChange={setAdmitDate} />
+                <div className="flex flex-col gap-1.5">
+                  <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest px-1">Yatış Şekli</label>
+                  <label className={`flex items-center gap-2.5 cursor-pointer px-3 py-2.5 rounded-xl border transition-all ${emergAdmit ? 'border-rose-300 bg-rose-50' : 'border-slate-200 bg-white'}`}>
+                    <div className={`w-5 h-5 rounded-md border-2 flex items-center justify-center transition-all shrink-0 ${emergAdmit ? 'bg-rose-600 border-rose-600' : 'bg-white border-slate-300'}`}>
+                      <input type="checkbox" checked={emergAdmit} onChange={e => setEmergAdmit(e.target.checked)} className="hidden" />
+                      {emergAdmit && <CheckCircle2 size={13} className="text-white" />}
+                    </div>
+                    <span className={`text-sm font-bold ${emergAdmit ? 'text-rose-700' : 'text-slate-500'}`}>Acilden Yatış</span>
+                  </label>
+                </div>
+                <Field label="Kısa Yatış Tanısı" value={staticData.admitDx || ''} onChange={v => setStaticData({ ...staticData, admitDx: v })} placeholder="örn: piyelonefrit" />
+                <Field label="Operasyon / İşlem" value={staticData.operationName} onChange={v => setStaticData({ ...staticData, operationName: v })} />
+                <Field label="Plan / Operasyon Tarihi" type="date" value={staticData.operationDate} onChange={v => setStaticData({ ...staticData, operationDate: v })} />
+                <Field label="ASA Skoru" value={staticData.asaScore} onChange={v => setStaticData({ ...staticData, asaScore: v })} />
+                <Field label="Kan Grubu" value={staticData.bloodGroup} onChange={v => setStaticData({ ...staticData, bloodGroup: v })} />
+                <Field label="Seroloji" value={staticData.serology} onChange={v => setStaticData({ ...staticData, serology: v })} />
+                <Field label="Alerjiler" value={staticData.allergies} onChange={v => setStaticData({ ...staticData, allergies: v })} />
+                <Field label="Sorumlu (kısaltma)" value={assignedTo} onChange={setAssignedTo} placeholder="örn: AHY" />
+                {patient.gender !== 'F' && (
+                  <div className="grid grid-cols-2 gap-3">
+                    <Field label="PSA (ng/mL)" value={staticData.psa || ''} onChange={v => setStaticData({ ...staticData, psa: v })} placeholder="4.2" />
+                    <Field label="PSA Tarihi" type="date" value={staticData.psaDate || ''} onChange={v => setStaticData({ ...staticData, psaDate: v })} />
+                  </div>
+                )}
+                <div className="md:col-span-2"><TextAreaField label="Yatış Öyküsü & Hikaye" value={staticData.complaint} onChange={v => setStaticData({ ...staticData, complaint: v })} rows={4} /></div>
+                <TextAreaField label="Kronik Hastalıklar & Rutin İlaçlar" value={staticData.historyDisease} onChange={v => setStaticData({ ...staticData, historyDisease: v })} />
+                <TextAreaField label="Geçirilmiş Ameliyatlar" value={staticData.historySurgery} onChange={v => setStaticData({ ...staticData, historySurgery: v })} />
+              </div>
+            </div>
+
+            {/* Epikriz taslağı */}
+            <div className="bg-white rounded-2xl border border-slate-200 p-4 sm:p-6 shadow-sm space-y-4">
+              <div className="flex items-center justify-between flex-wrap gap-3">
+                <SectionTitle icon={Sparkles} title="AI Epikriz Taslağı" color="text-indigo-600" />
+                <button onClick={generateEpikriz} disabled={epikrizLoading} className="px-4 py-2 bg-indigo-600 text-white rounded-xl text-xs font-bold hover:bg-indigo-700 disabled:opacity-50 flex items-center gap-2">
+                  {epikrizLoading ? <Loader2 size={14} className="animate-spin" /> : <Sparkles size={14} />} Taslak Oluştur
+                </button>
+              </div>
+              {epikriz && (
+                <div className="space-y-2">
+                  <textarea readOnly value={epikriz} className="w-full p-4 border border-slate-200 rounded-xl bg-slate-50 text-sm leading-relaxed min-h-[250px] font-mono" />
+                  <p className="text-[10px] text-slate-400">Bu taslak yalnızca başlangıç noktasıdır — içerik, tanılar ve öneriler sorumlu hekim tarafından doğrulanmalıdır.</p>
+                </div>
+              )}
+            </div>
+
+            {/* Taburcu */}
+            <div className="bg-rose-50 rounded-2xl border border-rose-100 p-4 sm:p-5 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+              <div>
+                <h4 className="font-bold text-rose-800 text-sm">Hastayı Taburcu Et / Yatağı Boşalt</h4>
+                <p className="text-xs text-rose-600 mt-0.5">Hasta kaydı yataktan kaldırılır. Bu işlem geri alınamaz.</p>
+              </div>
+              {!confirmDischarge ? (
+                <button onClick={() => setConfirmDischarge(true)} className="px-4 py-2.5 bg-white border border-rose-300 text-rose-700 rounded-xl text-xs font-bold hover:bg-rose-100">Taburcu Et</button>
+              ) : (
+                <div className="flex gap-2">
+                  <button onClick={() => setConfirmDischarge(false)} className="px-4 py-2.5 bg-white border border-slate-200 text-slate-600 rounded-xl text-xs font-bold">Vazgeç</button>
+                  <button onClick={() => onDischarge(bedIndex)} className="px-4 py-2.5 bg-rose-600 text-white rounded-xl text-xs font-bold hover:bg-rose-700">Eminim, Taburcu Et</button>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+};
+
+/* ================= YAZDIRMA SAYFASI (Servis Devir Listesi) ================= */
+
+const PrintSheet = ({ beds }) => {
+  const fmtD = (ds) => {
+    if (!ds) return '';
+    const d = new Date(ds);
+    if (isNaN(d)) return ds;
+    return `${String(d.getDate()).padStart(2, '0')}.${String(d.getMonth() + 1).padStart(2, '0')}`;
+  };
+
+  const roundsDesc = (p) => Object.values(p.rounds || {}).sort((a, b) => new Date(b.date) - new Date(a.date));
+
+  const latestLab = (p, key) => {
+    for (const r of roundsDesc(p)) {
+      const v = r.labs?.[key];
+      if (v && String(v).trim()) return { v: String(v).trim(), d: r.date };
+    }
+    return null;
+  };
+
+  const lastRoundSummary = (p) => {
+    const r = roundsDesc(p)[0];
+    if (!r) return '';
+    const parts = [];
+    if (r.vitals?.temp) parts.push(`Ateş ${r.vitals.temp}`);
+    if (r.vitals?.bp) parts.push(`TA ${r.vitals.bp}`);
+    if (r.labs?.wbc) parts.push(`WBC ${r.labs.wbc}`);
+    if (r.labs?.crp) parts.push(`CRP ${r.labs.crp}`);
+    if (r.labs?.hb) parts.push(`Hb ${r.labs.hb}`);
+    if (r.io?.urineDescription) parts.push(`İdrar: ${r.io.urineDescription}`);
+    if (r.io?.drain1) parts.push(`Dren: ${r.io.drain1}`);
+    if (r.meds?.anticoagulant) parts.push(`AK: ${r.meds.anticoagulant}`);
+    return parts.length ? `${fmtD(r.date)} vizit — ${parts.join(', ')}` : '';
+  };
+
+  const clinicalCol = (p) => {
+    const lines = [];
+    const admD = p.admissionDate ? fmtD(p.admissionDate) : '';
+    const opName = (p.staticData.operationName || '').trim();
+    const opDate = p.staticData.operationDate;
+    const brk = [p.fromEmergency ? 'acilden' : null, (p.staticData.admitDx || '').trim() || null].filter(Boolean).join(' - ');
+    let header;
+    if (!opName) {
+      // Cerrahi plan yok: "Yatış: 15.06 [acilden - piyelonefrit]"
+      header = `Yatış: ${admD}${brk ? ` [${brk}]` : ''}`;
+    } else {
+      const diff = dayDiff(p.admissionDate, opDate);
+      if (diff !== null && diff >= 0 && diff <= 1) {
+        // Rutin akış (op yatışla aynı gün veya ertesi gün): kompakt format
+        header = [[fmtD(opDate), opName].filter(Boolean).join(' — '), podText(opDate), brk ? `[${brk}]` : ''].filter(Boolean).join(' • ');
+      } else {
+        // Yatış ile plan arası açık: "15.06 yatış [acilden] — 21.06 Sol PNL • Preop (6 gün kaldı)"
+        header = `${admD} yatış${brk ? ` [${brk}]` : ''} — ${opDate ? fmtD(opDate) + ' ' : ''}${opName} • ${opDate ? podText(opDate) : 'plan tarihi belirsiz'}`;
+      }
+    }
+    if (header) lines.push({ b: true, t: header });
+    if (p.staticData.complaint) lines.push({ t: p.staticData.complaint });
+    if (p.visitNotes) lines.push({ t: p.visitNotes });
+    const vs = lastRoundSummary(p);
+    if (vs) lines.push({ t: vs });
+    (p.consultations || []).forEach(c => {
+      lines.push({ t: `${fmtD(c.requestDate)} ${c.department} kons: ${c.status === 'RESULTED' ? (c.result || 'cevaplandı') : 'BEKLİYOR'}` });
+    });
+    const open = (p.tasks || []).filter(t => !t.completed);
+    if (open.length) lines.push({ b: true, t: '→ ' + open.map(t => t.text).join(' / ') });
+    return lines;
+  };
+
+  const backgroundCol = (p) => {
+    const lines = [];
+    const idrarK = [...(p.cultures || [])].filter(c => c.type === 'İdrar').sort((a, b) => new Date(b.takenAt) - new Date(a.takenAt))[0];
+    const l1 = [
+      p.staticData.asaScore,
+      idrarK ? `İKAB: ${idrarK.status === 'RESULTED' ? (idrarK.result || 'sonuçlandı') : 'bekliyor'} (${fmtD(idrarK.takenAt)})` : null,
+      p.staticData.bloodGroup ? `KG: ${p.staticData.bloodGroup}` : null,
+      p.staticData.serology ? `Sero: ${p.staticData.serology}` : null,
+    ].filter(Boolean).join('  ');
+    if (l1) lines.push({ b: true, t: l1 });
+    const pre = p.labsPreop || {};
+    const preParts = [pre.hb ? `Hb ${pre.hb}` : null, pre.inr ? `INR ${pre.inr}` : null, pre.plt ? `PLT ${pre.plt}` : null].filter(Boolean);
+    if (preParts.length) lines.push({ b: true, t: `Preop${pre.date ? ` (${fmtD(pre.date)})` : ''}: ${preParts.join(', ')}` });
+    const post = p.labsPostop || {};
+    const postParts = [post.hb ? `Hb ${post.hb}` : null, post.na ? `Na ${post.na}` : null].filter(Boolean);
+    if (postParts.length) lines.push({ b: true, t: `Postop${post.date ? ` (${fmtD(post.date)})` : ''}: ${postParts.join(', ')}` });
+    if (p.staticData.historyDisease) lines.push({ t: 'Ha: ' + p.staticData.historyDisease });
+    if (p.staticData.historySurgery) lines.push({ t: 'Op: ' + p.staticData.historySurgery });
+    lines.push({ t: 'Al: ' + (p.staticData.allergies || 'yok') });
+    const activeAbx = (p.antibiotics || []).filter(a => a.isActive);
+    if (activeAbx.length) lines.push({ b: true, t: 'ABX: ' + activeAbx.map(a => `${a.name} (${Math.max(1, daysElapsed(a.startDate) + 1)}. gün)`).join(', ') });
+    const others = (p.cultures || []).filter(c => c.type !== 'İdrar');
+    if (others.length) lines.push({ t: 'Kx: ' + others.map(c => `${c.type} ${c.status === 'RESULTED' ? (c.result || 'sonuçlandı') : 'bekliyor'} (${fmtD(c.takenAt)})`).join('; ') });
+    if (p.nephrostomyRight || p.nephrostomyLeft) {
+      lines.push({ b: true, t: `Nefrostomi: ${p.nephrostomyRight ? 'SAĞ ' : ''}${p.nephrostomyLeft ? 'SOL' : ''} — son pansuman ${fmtD(p.lastNephrostomyDressingDate) || '?'}` });
+    }
+    return lines;
+  };
+
+  return (
+    <div className="print-sheet">
+      <div className="ps-title">
+        ÜROLOJİ SERVİSİ — HASTA DEVİR LİSTESİ
+        <span>{new Date().toLocaleDateString('tr-TR', { day: '2-digit', month: '2-digit', year: 'numeric' })}</span>
+      </div>
+      <table className="ps-table">
+        <thead>
+          <tr>
+            <th style={{ width: '3%' }}>No</th>
+            <th style={{ width: '11%' }}>Hasta</th>
+            <th style={{ width: '6%' }}>Kre / PSA</th>
+            <th style={{ width: '42%' }}>Klinik Seyir / Plan</th>
+            <th style={{ width: '33%' }}>Özgeçmiş • Kültür • Tedavi</th>
+            <th style={{ width: '5%' }}>Sor.</th>
+          </tr>
+        </thead>
+        <tbody>
+          {beds.map((p, i) => {
+            if (!p) return (
+              <tr key={'empty' + i} className="ps-empty">
+                <td>{i + 1}</td><td colSpan={5}></td>
+              </tr>
+            );
+            const kre = latestLab(p, 'creatinine')
+              || (p.labsPostop?.creatinine ? { v: p.labsPostop.creatinine, d: p.labsPostop.date } : null)
+              || (p.labsPreop?.creatinine ? { v: p.labsPreop.creatinine, d: p.labsPreop.date } : null);
+            const psa = p.gender !== 'F'
+              ? (p.staticData.psa ? { v: p.staticData.psa, d: p.staticData.psaDate } : latestLab(p, 'psa'))
+              : null;
+            return (
+              <tr key={p.id}>
+                <td className="ps-c">{i + 1}</td>
+                <td><b>{(p.name || '').toUpperCase()}, {p.age > 0 ? p.age : '?'}</b> {p.gender === 'F' ? 'K' : 'E'}</td>
+                <td className="ps-c">
+                  {kre ? <>{kre.v}<br /><span className="ps-dim">({fmtD(kre.d)})</span></> : ''}
+                  {psa ? <div className="ps-psa">PSA {psa.v}{psa.d ? <><br /><span className="ps-dim">({fmtD(psa.d)})</span></> : null}</div> : null}
+                </td>
+                <td>{clinicalCol(p).map((l, j) => <div key={j} className={l.b ? 'ps-b' : ''}>{l.t}</div>)}</td>
+                <td>{backgroundCol(p).map((l, j) => <div key={j} className={l.b ? 'ps-b' : ''}>{l.t}</div>)}</td>
+                <td className="ps-c ps-b">{p.assignedTo || ''}</td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+};
+
+/* ================= AI ASİSTAN ================= */
+
+const AIAssistant = () => {
+  const [isOpen, setIsOpen] = useState(false);
+  const [messages, setMessages] = useState([{ role: 'ai', text: 'Merhaba! Üroloji servisiyle ilgili klinik sorularınızı yanıtlayabilirim.' }]);
+  const [input, setInput] = useState('');
+  const [isLoading, setIsLoading] = useState(false);
+  const scrollRef = useRef(null);
+
+  useEffect(() => { scrollRef.current?.scrollTo(0, scrollRef.current.scrollHeight); }, [messages, isOpen]);
+
+  const send = async () => {
+    if (!input.trim() || isLoading) return;
+    const userMsg = input.trim();
+    setInput('');
+    const history = [...messages, { role: 'user', text: userMsg }];
+    setMessages(history);
+    setIsLoading(true);
+    try {
+      const context = history.slice(-8).map(m => `${m.role === 'ai' ? 'Asistan' : 'Kullanıcı'}: ${m.text}`).join('\n');
+      const text = await callClaude(`Sen bir üroloji servisinde çalışan asistan hekimlere yardımcı olan klinik bilgi asistanısın. Türkçe, kısa ve kaynak temelli yanıt ver. Emin olmadığın konularda belirsizliği açıkça söyle.\n\nKonuşma geçmişi:\n${context}\n\nSon soruya yanıt ver.`);
+      setMessages(prev => [...prev, { role: 'ai', text }]);
+    } catch (e) {
+      setMessages(prev => [...prev, { role: 'ai', text: e.code === 'NO_KEY' ? NO_KEY_MSG : 'Bağlantı hatası oluştu, lütfen tekrar deneyin.' }]);
+    } finally { setIsLoading(false); }
+  };
+
+  return (
+    <div className="fixed bottom-4 right-4 z-40 flex flex-col items-end no-print">
+      {isOpen && (
+        <div className="bg-white w-[92vw] max-w-sm h-[28rem] rounded-2xl shadow-2xl border border-slate-200 flex flex-col mb-3 overflow-hidden">
+          <div className="bg-indigo-600 p-3 flex justify-between items-center">
+            <h3 className="text-white font-bold flex items-center gap-2 text-sm"><Bot size={17} /> Klinik Asistan</h3>
+            <button onClick={() => setIsOpen(false)} className="text-slate-200 hover:text-white"><X size={17} /></button>
+          </div>
+          <div ref={scrollRef} className="flex-1 overflow-y-auto p-3 space-y-3 bg-slate-50">
+            {messages.map((m, i) => (
+              <div key={i} className={`flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+                <div className={`max-w-[85%] p-2.5 rounded-xl text-sm whitespace-pre-wrap leading-relaxed ${m.role === 'user' ? 'bg-indigo-600 text-white rounded-br-none' : 'bg-white border border-slate-200 text-slate-800 rounded-bl-none shadow-sm'}`}>{m.text}</div>
+              </div>
+            ))}
+            {isLoading && <div className="flex justify-start"><div className="bg-white border border-slate-200 p-2.5 rounded-xl rounded-bl-none shadow-sm"><Loader2 className="animate-spin text-slate-400" size={15} /></div></div>}
+          </div>
+          <div className="p-2.5 bg-white border-t flex gap-2">
+            <input className="flex-1 bg-slate-100 rounded-lg px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-indigo-500"
+              placeholder="Klinik soru sorun..." value={input} onChange={e => setInput(e.target.value)}
+              onKeyDown={e => e.key === 'Enter' && send()} />
+            <button onClick={send} disabled={isLoading} className="bg-indigo-600 text-white p-2 rounded-lg hover:bg-indigo-700 disabled:opacity-50"><Send size={15} /></button>
+          </div>
+        </div>
+      )}
+      <button onClick={() => setIsOpen(!isOpen)} className="w-14 h-14 bg-indigo-600 rounded-full text-white shadow-xl shadow-indigo-300 flex items-center justify-center hover:scale-105 transition-transform">
+        {isOpen ? <X size={22} /> : <MessageSquare size={22} />}
+      </button>
+    </div>
+  );
+};
+
+/* ================= ANA UYGULAMA ================= */
+
+const App = () => {
+  const [beds, setBeds] = useState([]);
+  const [wardSize, setWardSize] = useState(DEFAULT_WARD_SIZE);
+  const [loaded, setLoaded] = useState(false);
+  const [saveState, setSaveState] = useState('idle');
+  const [currentView, setCurrentView] = useState('beds');
+  const [selectedBedIndex, setSelectedBedIndex] = useState(null);
+  const [isAdmitting, setIsAdmitting] = useState(false);
+  const [searchTerm, setSearchTerm] = useState('');
+  const [viewMode, setViewMode] = useState('grid');
+  const [dragOverIndex, setDragOverIndex] = useState(null);
+  const [mobileMenu, setMobileMenu] = useState(false);
+  const [importMsg, setImportMsg] = useState('');
+  const [apiKeyInput, setApiKeyInput] = useState(getApiKey());
+  const importRef = useRef(null);
+
+  // İlk yükleme
+  useEffect(() => {
+    (async () => {
+      const data = await loadWard();
+      if (data && Array.isArray(data.beds)) {
+        setBeds(data.beds);
+        setWardSize(data.wardSize || data.beds.length || DEFAULT_WARD_SIZE);
+      } else {
+        setBeds(Array(DEFAULT_WARD_SIZE).fill(null));
+      }
+      setLoaded(true);
+    })();
+  }, []);
+
+  const commit = useCallback(async (newBeds, newSize) => {
+    setBeds(newBeds);
+    const size = newSize ?? newBeds.length;
+    setSaveState('saving');
+    const ok = await persistWard(newBeds, size);
+    setSaveState(ok ? 'saved' : 'error');
+  }, []);
+
+  const savePatient = (index, patient) => {
+    const next = [...beds];
+    next[index] = patient;
+    commit(next);
+  };
+
+  const dischargePatient = (index) => {
+    const next = [...beds];
+    next[index] = null;
+    commit(next);
+    setSelectedBedIndex(null);
+  };
+
+  const admitPatient = (patient) => {
+    if (selectedBedIndex === null) return;
+    const next = [...beds];
+    next[selectedBedIndex] = patient;
+    commit(next);
+    setIsAdmitting(false);
+    setSelectedBedIndex(null);
+    setSearchTerm('');
+  };
+
+  const movePatient = (from, to) => {
+    if (from === to || !beds[from]) return;
+    const next = [...beds];
+    const a = { ...next[from], bedNumber: to + 1 };
+    const b = next[to] ? { ...next[to], bedNumber: from + 1 } : null;
+    next[to] = a; next[from] = b;
+    commit(next);
+  };
+
+  const handleBedClick = (index) => {
+    setSelectedBedIndex(index);
+    if (!beds[index]) setIsAdmitting(true);
+  };
+
+  const exportJSON = () => {
+    const blob = new Blob([JSON.stringify({ beds, wardSize, exportedAt: new Date().toISOString() }, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = `urotakip-yedek-${todayStr()}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const importJSON = (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      try {
+        const data = JSON.parse(String(reader.result));
+        if (!Array.isArray(data.beds)) throw new Error('geçersiz');
+        const size = data.wardSize || data.beds.length;
+        setWardSize(size);
+        commit(data.beds, size);
+        setImportMsg('Yedek başarıyla geri yüklendi.');
+      } catch (err) {
+        setImportMsg('Dosya okunamadı — geçerli bir ÜroTakip yedeği değil.');
+      }
+    };
+    reader.readAsText(file);
+    e.target.value = '';
+  };
+
+  const changeWardSize = (size) => {
+    const s = Math.max(4, Math.min(80, size));
+    let next = [...beds];
+    if (s > next.length) next = [...next, ...Array(s - next.length).fill(null)];
+    else {
+      const removedPatients = next.slice(s).filter(Boolean).length;
+      if (removedPatients > 0) { setImportMsg(`Son yataklarda ${removedPatients} hasta var — önce onları taşıyın.`); return; }
+      next = next.slice(0, s);
+    }
+    setWardSize(s);
+    commit(next, s);
+  };
+
+  const clearAll = () => {
+    commit(Array(wardSize).fill(null), wardSize);
+    setImportMsg('Tüm servis verisi temizlendi.');
+  };
+
+  const filtered = beds.map((b, i) => ({ bed: b, index: i })).filter(({ bed }) => {
+    if (!searchTerm) return true;
+    if (!bed) return false;
+    const q = searchTerm.toLowerCase();
+    return bed.name.toLowerCase().includes(q) || (bed.staticData.operationName || '').toLowerCase().includes(q);
+  });
+
+  if (!loaded) {
+    return (
+      <div className="h-screen flex items-center justify-center bg-slate-100">
+        <div className="flex flex-col items-center gap-3 text-slate-400">
+          <Loader2 className="animate-spin" size={32} />
+          <span className="text-sm font-bold">Servis verileri yükleniyor...</span>
+        </div>
+      </div>
+    );
+  }
+
+  /* ---- Görünümler ---- */
+
+  const renderTasks = () => {
+    const dressingPatients = beds.map((b, i) => ({ bed: b, index: i })).filter(({ bed }) => {
+      if (!bed) return false;
+      const isOpen = isOpenSurgery(bed.staticData.operationName);
+      const hasNeph = bed.nephrostomyRight || bed.nephrostomyLeft;
+      if (hasNeph && daysElapsed(bed.lastNephrostomyDressingDate || bed.staticData.operationDate) >= 3) return true;
+      return isOpen && daysElapsed(bed.staticData.operationDate) >= 1;
+    });
+    return (
+      <div className="p-4 sm:p-6 space-y-5">
+        <div>
+          <h2 className="text-xl font-bold text-slate-800 flex items-center gap-2">
+            <div className="p-2 bg-rose-100 rounded-lg text-rose-600"><ShieldAlert size={22} /></div>
+            Pansuman Takibi
+          </h2>
+          <p className="text-xs text-slate-500 mt-1">Açık/insizyonel ürolojik cerrahi geçiren hastalar ameliyat sonrası 1. günden taburculuğa kadar; nefrostomili hastalar son pansumandan 3 gün sonra listelenir.</p>
+        </div>
+        {dressingPatients.length === 0 ? <EmptyState icon={ShieldAlert} text="Bekleyen pansuman görevi yok." /> : (
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+            {dressingPatients.map(({ bed, index }) => {
+              const isOpen = isOpenSurgery(bed.staticData.operationName);
+              const pod = daysElapsed(bed.staticData.operationDate);
+              const nephDays = daysElapsed(bed.lastNephrostomyDressingDate || bed.staticData.operationDate);
+              return (
+                <div key={bed.id} onClick={() => handleBedClick(index)} className="bg-white rounded-xl border border-slate-200 p-4 hover:shadow-md hover:border-indigo-300 transition-all cursor-pointer">
+                  <div className="flex items-center gap-3 mb-3 pb-3 border-b border-slate-100">
+                    <div className="w-8 h-8 rounded-full bg-indigo-600 text-white flex items-center justify-center font-bold text-sm shrink-0">{index + 1}</div>
+                    <div className="truncate">
+                      <div className="font-bold text-slate-800 uppercase text-xs truncate">{bed.name}</div>
+                      <div className="text-[10px] text-slate-500 truncate">{bed.staticData.operationName || '—'}</div>
+                    </div>
+                  </div>
+                  <div className="space-y-2">
+                    {isOpen && (
+                      <div className={`p-2.5 rounded-lg border ${pod >= 4 ? 'bg-amber-50 border-amber-200' : 'bg-rose-50 border-rose-100'}`}>
+                        <div className="flex justify-between items-center text-[10px] font-black uppercase">
+                          <span className="flex items-center gap-1"><ShieldAlert size={12} /> Cerrahi Pansuman</span>
+                          <span className="bg-white px-1.5 rounded">POD {pod}</span>
+                        </div>
+                        {pod >= 4 && <div className="text-[9px] text-amber-700 font-bold mt-1 flex items-center gap-1"><Clock size={10} /> POD 4+: pansuman gerekmeyebilir, yara değerlendirin.</div>}
+                      </div>
+                    )}
+                    {(bed.nephrostomyRight || bed.nephrostomyLeft) && nephDays >= 3 && (
+                      <div className="p-2.5 rounded-lg border border-blue-100 bg-blue-50">
+                        <div className="flex justify-between items-center text-[10px] font-black uppercase text-blue-800">
+                          <span className="flex items-center gap-1"><CheckCircle2 size={12} /> Nefrostomi Pansumanı</span>
+                          <span className="bg-white px-1.5 rounded">{nephDays} günlük</span>
+                        </div>
+                        <div className="text-[9px] text-blue-600 font-bold mt-0.5">Taraf: {bed.nephrostomyRight && 'SAĞ'} {bed.nephrostomyLeft && 'SOL'}</div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  const renderCultures = () => {
+    const culturePatients = beds.map((b, i) => ({ bed: b, index: i })).filter(({ bed }) => bed?.cultures?.some(c => c.status === 'PENDING'));
+    return (
+      <div className="p-4 sm:p-6 space-y-5">
+        <h2 className="text-xl font-bold text-slate-800 flex items-center gap-2">
+          <div className="p-2 bg-amber-100 rounded-lg text-amber-600"><TestTube size={22} /></div>
+          Sonuç Bekleyen Kültürler
+        </h2>
+        {culturePatients.length === 0 ? <EmptyState icon={TestTube} text="Bekleyen kültür sonucu yok." /> : (
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+            {culturePatients.map(({ bed, index }) => (
+              <div key={bed.id} onClick={() => handleBedClick(index)} className="bg-white rounded-xl border border-slate-200 p-4 hover:shadow-md hover:border-indigo-300 transition-all cursor-pointer">
+                <div className="flex items-center gap-3 mb-3 pb-3 border-b border-slate-100">
+                  <div className="w-8 h-8 rounded-full bg-indigo-600 text-white flex items-center justify-center font-bold text-sm shrink-0">{index + 1}</div>
+                  <div className="min-w-0">
+                    <div className="font-bold text-slate-800 truncate text-sm">{bed.name}</div>
+                    <div className="text-[10px] text-slate-500 truncate">{bed.staticData.operationName || '—'}</div>
+                  </div>
+                </div>
+                <div className="space-y-2">
+                  {bed.cultures.filter(c => c.status === 'PENDING').map(c => {
+                    const days = daysElapsed(c.takenAt);
+                    const critical = days >= 2 && (c.type === 'İdrar' || c.type === 'Nefrostomi' || c.type === 'Kan');
+                    return (
+                      <div key={c.id} className={`p-2.5 rounded-lg border text-xs flex justify-between items-center font-bold ${critical ? 'bg-orange-50 border-orange-200 text-orange-900' : 'bg-slate-50 border-slate-100 text-slate-700'}`}>
+                        <span className="flex items-center gap-1.5"><TestTube size={13} className={critical ? 'text-orange-600' : 'text-slate-400'} /> {c.type} Kültürü</span>
+                        <span className={`px-1.5 py-0.5 rounded text-[10px] ${critical ? 'bg-white/60 text-orange-800' : 'bg-slate-200 text-slate-600'}`}>{days === 0 ? 'Bugün' : `${days} gün`}</span>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  const renderSettings = () => (
+    <div className="p-4 sm:p-6 max-w-2xl mx-auto space-y-5">
+      <h2 className="text-xl font-bold text-slate-800 flex items-center gap-2">
+        <div className="p-2 bg-slate-100 rounded-lg text-slate-600"><SettingsIcon size={22} /></div>
+        Ayarlar & Yedekleme
+      </h2>
+
+      <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm space-y-3">
+        <h3 className="text-xs font-black text-slate-400 uppercase tracking-widest">Servis Yatak Sayısı</h3>
+        <div className="flex items-center gap-3">
+          <input type="number" min={4} max={80} value={wardSize} onChange={e => changeWardSize(parseInt(e.target.value) || wardSize)}
+            className="w-24 px-3 py-2.5 rounded-xl border border-slate-200 text-sm font-bold outline-none focus:border-indigo-500" />
+          <span className="text-xs text-slate-500">yatak (4–80 arası). Azaltırken son yataklar boş olmalıdır.</span>
+        </div>
+      </div>
+
+      <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm space-y-3">
+        <h3 className="text-xs font-black text-indigo-600 uppercase tracking-widest flex items-center gap-1"><Sparkles size={14} /> AI Özellikleri</h3>
+        <p className="text-xs text-slate-500 leading-relaxed">Epikriz analizi, SBAR risk analizi, epikriz taslağı ve klinik asistan özellikleri <b>Google Gemini</b> ve Netlify AI Gateway aracılığıyla otomatik olarak aktif edilmiştir. Herhangi bir harici API anahtarı girmenize gerek yoktur.</p>
+        <p className="text-[10px] font-bold text-emerald-600">✓ Google Gemini Aktif — AI özellikleri kullanıma hazır</p>
+      </div>
+      <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm space-y-3">
+        <h3 className="text-xs font-black text-slate-400 uppercase tracking-widest">Veri Yedekleme</h3>
+        <p className="text-xs text-slate-500 leading-relaxed">Servis verileri Netlify Database üzerinde saklanır ve uygulamayı yeniden açtığınızda geri yüklenir. JSON yedeği ayrıca indirilebilir ve gerektiğinde geri yüklenebilir.</p>
+        <div className="flex flex-wrap gap-3">
+          <button onClick={exportJSON} className="px-4 py-2.5 bg-indigo-600 text-white rounded-xl text-xs font-bold hover:bg-indigo-700 flex items-center gap-2"><Download size={15} /> Yedek İndir (JSON)</button>
+          <button onClick={() => importRef.current?.click()} className="px-4 py-2.5 bg-white border border-indigo-200 text-indigo-700 rounded-xl text-xs font-bold hover:bg-indigo-50 flex items-center gap-2"><Upload size={15} /> Yedek Geri Yükle</button>
+          <input type="file" accept="application/json" ref={importRef} onChange={importJSON} className="hidden" />
+        </div>
+        {importMsg && <p className="text-xs font-bold text-slate-600">{importMsg}</p>}
+      </div>
+
+      <div className="bg-rose-50 rounded-2xl border border-rose-100 p-5 space-y-3">
+        <h3 className="text-xs font-black text-rose-500 uppercase tracking-widest">Tehlikeli Bölge</h3>
+        <p className="text-xs text-rose-600">Tüm servis verisini siler. Öncesinde yedek almanız şiddetle önerilir.</p>
+        <ConfirmButton label="Tüm Veriyi Temizle" confirmLabel="Eminim, Hepsini Sil" onConfirm={clearAll} />
+      </div>
+
+      <div className="bg-amber-50 rounded-2xl border border-amber-100 p-4 text-[11px] text-amber-800 leading-relaxed">
+        <b>Gizlilik notu:</b> Bu araç kişisel bir takip yardımcısıdır. Hasta mahremiyeti ve KVKK açısından, mümkünse ad-soyad yerine baş harf/protokol numarası kullanmayı ve cihazınızı kilitli tutmayı düşünün. Resmi tıbbi kayıt yerine geçmez.
+      </div>
+    </div>
+  );
+
+  const renderBeds = () => (
+    <div className="p-4 sm:p-6 h-full flex flex-col">
+      <div className="flex flex-col md:flex-row justify-between items-stretch md:items-center gap-3 mb-5 shrink-0 no-print">
+        <div className="relative w-full md:w-80">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+          <input type="text" placeholder="Hasta veya işlem ara..." value={searchTerm} onChange={e => setSearchTerm(e.target.value)}
+            className="w-full pl-10 pr-4 py-2.5 bg-white border border-slate-200 rounded-xl text-sm outline-none focus:ring-2 focus:ring-indigo-500" />
+        </div>
+        <div className="flex items-center gap-2 justify-end">
+          <button onClick={() => setTimeout(() => window.print(), 100)}
+            className="flex items-center gap-2 px-4 py-2.5 bg-indigo-600 text-white rounded-xl text-sm font-bold shadow-lg shadow-indigo-200 hover:bg-indigo-700 active:scale-95 transition-all">
+            <Printer size={15} /> <span className="hidden sm:inline">Servis Listesini</span> Yazdır
+          </button>
+          <div className="flex bg-white border border-slate-200 rounded-xl p-1">
+            <button onClick={() => setViewMode('grid')} className={`p-1.5 rounded-lg ${viewMode === 'grid' ? 'bg-indigo-50 text-indigo-600' : 'text-slate-400'}`}><LayoutGrid size={15} /></button>
+            <button onClick={() => setViewMode('list')} className={`p-1.5 rounded-lg ${viewMode === 'list' ? 'bg-indigo-50 text-indigo-600' : 'text-slate-400'}`}><List size={15} /></button>
+          </div>
+        </div>
+      </div>
+
+      <div className="flex-1 overflow-y-auto min-h-0 pb-24 print-area">
+        <div className="hidden print-header">
+          <div className="text-sm font-bold">Üroloji Servisi — Hasta Listesi • {new Date().toLocaleDateString('tr-TR')}</div>
+        </div>
+        <div className={viewMode === 'grid' ? 'grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3' : 'flex flex-col gap-3'}>
+          {filtered.length > 0 ? filtered.map(item => (
+            <div key={item.index} draggable={!!item.bed}
+              onDragStart={e => { if (!item.bed) { e.preventDefault(); return; } e.dataTransfer.setData('text/plain', String(item.index)); }}
+              onDragOver={e => { e.preventDefault(); if (dragOverIndex !== item.index) setDragOverIndex(item.index); }}
+              onDragEnd={() => setDragOverIndex(null)}
+              onDrop={e => { e.preventDefault(); setDragOverIndex(null); const src = parseInt(e.dataTransfer.getData('text/plain'), 10); if (!isNaN(src)) movePatient(src, item.index); }}>
+              <div className={`transition-all duration-200 rounded-xl ${dragOverIndex === item.index ? 'ring-4 ring-indigo-300 scale-[1.01]' : ''}`}>
+                <BedCard bedNumber={item.index + 1} patient={item.bed} onClick={() => handleBedClick(item.index)} />
+              </div>
+            </div>
+          )) : (
+            <div className="col-span-full text-center text-slate-400 py-10 bg-white rounded-xl border border-dashed border-slate-200 no-print">Kriterlere uygun hasta bulunamadı.</div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+
+  const renderContent = () => {
+    if (selectedBedIndex !== null && !isAdmitting && beds[selectedBedIndex]) {
+      return (
+        <div className="h-full sm:p-4 no-print">
+          <PatientDetail bedIndex={selectedBedIndex} patient={beds[selectedBedIndex]}
+            onBack={() => setSelectedBedIndex(null)} onSave={savePatient} onDischarge={dischargePatient} />
+        </div>
+      );
+    }
+    switch (currentView) {
+      case 'dashboard': return <Dashboard beds={beds} onNavigateToBed={idx => { setCurrentView('beds'); setSelectedBedIndex(idx); }} />;
+      case 'cultures': return renderCultures();
+      case 'tasks': return renderTasks();
+      case 'settings': return renderSettings();
+      default: return renderBeds();
+    }
+  };
+
+  const navigate = (view) => { setCurrentView(view); setSelectedBedIndex(null); setIsAdmitting(false); setMobileMenu(false); };
+
+  return (
+    <div className="app-root flex h-screen overflow-hidden bg-slate-100 font-sans">
+      <style>{`
+        .print-sheet { display: none; }
+        @media print {
+          @page { size: A4 landscape; margin: 7mm; }
+          .no-print, aside, .app-main { display: none !important; }
+          .app-root { display: block !important; height: auto !important; overflow: visible !important; }
+          body { background: white !important; }
+          .print-sheet { display: block !important; font-family: 'Times New Roman', serif; color: #000; }
+        }
+        .ps-title { font-size: 12px; font-weight: bold; display: flex; justify-content: space-between; margin-bottom: 4px; }
+        .ps-table { width: 100%; border-collapse: collapse; table-layout: fixed; }
+        .ps-table th, .ps-table td { border: 1px solid #000; padding: 2px 3px; font-size: 8.5px; line-height: 1.25; vertical-align: top; text-align: left; word-wrap: break-word; }
+        .ps-table thead th { background: #e5e7eb; font-size: 8px; text-transform: uppercase; text-align: center; }
+        .ps-table thead { display: table-header-group; }
+        .ps-c { text-align: center !important; }
+        .ps-b { font-weight: bold; }
+        .ps-dim { color: #555; font-size: 7.5px; }
+        .ps-empty td { height: 10px; }
+        .ps-psa { border-top: 1px solid #000; margin-top: 2px; padding-top: 1px; }
+        /* Arbitrary-value yedekleri (derleyicisiz ortam icin) */
+        .text-\\[9px\\] { font-size: 9px; line-height: 1.3; }
+        .text-\\[10px\\] { font-size: 10px; line-height: 1.35; }
+        .text-\\[11px\\] { font-size: 11px; line-height: 1.4; }
+        @media (min-width: 640px) { .sm\\:text-\\[11px\\] { font-size: 11px; line-height: 1.4; } }
+        .w-\\[250px\\] { width: 250px; }
+        .w-\\[92vw\\] { width: 92vw; }
+        .h-\\[28rem\\] { height: 28rem; }
+        .max-h-\\[500px\\] { max-height: 500px; }
+        .max-h-\\[95vh\\] { max-height: 95vh; }
+        .max-w-\\[1400px\\] { max-width: 1400px; }
+        .max-w-\\[85\\%\\] { max-width: 85%; }
+        .min-h-\\[70px\\] { min-height: 70px; }
+        .min-h-\\[80px\\] { min-height: 80px; }
+        .min-h-\\[120px\\] { min-height: 120px; }
+        .min-h-\\[250px\\] { min-height: 250px; }
+        .min-h-\\[13rem\\] { min-height: 13rem; }
+        .min-w-\\[100px\\] { min-width: 100px; }
+        .min-w-\\[200px\\] { min-width: 200px; }
+        .scale-\\[1\\.01\\] { transform: scale(1.01); }
+        .bg-black\\/40 { background-color: rgba(0,0,0,0.4); }
+        .bg-black\\/60 { background-color: rgba(0,0,0,0.6); }
+        .bg-white\\/60 { background-color: rgba(255,255,255,0.6); }
+        .bg-emerald-50\\/30 { background-color: rgba(236,253,245,0.3); }
+        .bg-indigo-50\\/30 { background-color: rgba(238,242,255,0.3); }
+        .bg-indigo-50\\/60 { background-color: rgba(238,242,255,0.6); }
+        .bg-slate-50\\/60 { background-color: rgba(248,250,252,0.6); }
+        .line-clamp-1 { display: -webkit-box; -webkit-line-clamp: 1; -webkit-box-orient: vertical; overflow: hidden; }
+        .line-clamp-2 { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+      `}</style>
+
+      {/* Masaüstü kenar çubuğu */}
+      <aside className="hidden lg:block no-print shrink-0 h-full">
+        <Sidebar currentView={currentView} onNavigate={navigate} beds={beds} saveState={saveState} />
+      </aside>
+
+      {/* Mobil menü */}
+      {mobileMenu && (
+        <div className="fixed inset-0 z-50 lg:hidden">
+          <div className="absolute inset-0 bg-black/40" onClick={() => setMobileMenu(false)} />
+          <div className="absolute left-0 top-0 h-full shadow-2xl">
+            <Sidebar currentView={currentView} onNavigate={navigate} beds={beds} saveState={saveState} />
+          </div>
+        </div>
+      )}
+
+      <main className="app-main flex-1 flex flex-col min-w-0 overflow-hidden relative">
+        {/* Mobil üst bar */}
+        <div className="lg:hidden bg-white border-b border-slate-200 px-3 py-2.5 flex items-center gap-3 no-print shrink-0">
+          <button onClick={() => setMobileMenu(true)} className="p-2 hover:bg-slate-100 rounded-lg text-slate-600"><Menu size={20} /></button>
+          <div className="flex items-center gap-2">
+            <Stethoscope size={18} className="text-indigo-600" />
+            <span className="font-black text-slate-800 text-sm">ÜroTakip</span>
+          </div>
+          <span className="ml-auto text-[10px] font-bold text-slate-400 uppercase">{beds.filter(Boolean).length}/{beds.length} dolu</span>
+        </div>
+        <div className="flex-1 overflow-y-auto min-h-0">{renderContent()}</div>
+      </main>
+
+      <PrintSheet beds={beds} />
+
+      <AIAssistant />
+
+      {isAdmitting && selectedBedIndex !== null && (
+        <AdmitModal bedIndex={selectedBedIndex}
+          onClose={() => { setIsAdmitting(false); setSelectedBedIndex(null); }}
+          onAdmit={admitPatient} />
+      )}
+    </div>
+  );
+};
+
+const ConfirmButton = ({ label, confirmLabel, onConfirm }) => {
+  const [confirming, setConfirming] = useState(false);
+  if (!confirming) return <button onClick={() => setConfirming(true)} className="px-4 py-2.5 bg-white border border-rose-300 text-rose-700 rounded-xl text-xs font-bold hover:bg-rose-100">{label}</button>;
+  return (
+    <div className="flex gap-2">
+      <button onClick={() => setConfirming(false)} className="px-4 py-2.5 bg-white border border-slate-200 text-slate-600 rounded-xl text-xs font-bold">Vazgeç</button>
+      <button onClick={() => { onConfirm(); setConfirming(false); }} className="px-4 py-2.5 bg-rose-600 text-white rounded-xl text-xs font-bold hover:bg-rose-700">{confirmLabel}</button>
+    </div>
+  );
+};
+
+const root = createRoot(document.getElementById('root'));
+root.render(<App />);
+
+
+// Yükleme ekranını kaldır
+const l = document.getElementById('loading');
+if (l) l.remove();
+  </script>
+</body>
+</html>
